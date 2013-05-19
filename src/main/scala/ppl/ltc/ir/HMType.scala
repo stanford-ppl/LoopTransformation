@@ -24,6 +24,14 @@ sealed trait HMType {
   }
 }
 
+/* function type unapplicator */
+object --> {
+  def unapply(t: HMType): Option[Tuple2[HMType, HMType]] = t match {
+    case HMTApply(ta, HMTPFunction, Seq(td, tc)) => Some((td, tc))
+    case _ => None
+  }
+}
+
 /* type specialization */
 case class HMSpecialization(val tarity: Int, val subs: Seq[HMType]) {
   for(s <- subs) {

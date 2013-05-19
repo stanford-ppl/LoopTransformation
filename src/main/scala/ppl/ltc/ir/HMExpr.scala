@@ -9,27 +9,20 @@ sealed trait HMExpr {
   def specialize(op: HMSpecialization): HMExpr
 }
 
-/* a basic application combinator */
-case class HMEApply(val fx: HMExpr, val arg: HMExpr) extends HMExpr {
-  if(fx.hmtype.tarity != arg.hmtype.tarity) throw new IRValidationException()
+/* a basic composition combinator */
+case class HMECompose(val fx1: HMExpr, val fx2: HMExpr) extends HMExpr {
+  if(fx1.hmtype.tarity != fx2.hmtype.tarity) throw new IRValidationException()
   val hmtype: HMType = {
-    fx.hmtype match {
-      case HMTApply(tarity, HMTPFunction, Seq(tdomain, tcodomain)) => {
-        if(tdomain != arg.hmtype) throw new IRValidationException()
-        tcodomain
+    (fx1.hmtype, fx2.hmtype) match {
+      case ((td1 --> tc1), (td2 --> tc2)) => {
+        if(td1 != tc2) throw new IRValidationException()
+        td2 --> tc1
       }
       case _ => throw new IRValidationException()
     }
   }
-  def specialize(op: HMSpecialization): HMExpr = HMEApply(fx.specialize(op), arg.specialize(op))
+  def specialize(op: HMSpecialization): HMExpr = HMECompose(fx1.specialize(op), fx2.specialize(op))
 }
 
-/* function composition */
-case class HMECompose(val a: HMType, val b: HMType, val c: HMType) extends HMExpr {
-  if(a.tarity != b.tarity) throw new IRValidationException()
-  if(b.tarity != c.tarity) throw new IRValidationException()
-  val hmtype: HMType = (a --> b) --> ((b --> c) --> (a --> c))
-  def specialize(op: HMSpecialization): HMExpr = {
-    HMECompose(a.specialize(op), b.specialize(op), c.specialize(op))
-  }
-}
+
+
