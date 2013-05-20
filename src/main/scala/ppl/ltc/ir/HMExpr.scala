@@ -24,5 +24,18 @@ case class HMECompose(val fx1: HMExpr, val fx2: HMExpr) extends HMExpr {
   def specialize(op: HMSpecialization): HMExpr = HMECompose(fx1.specialize(op), fx2.specialize(op))
 }
 
+/* fmap */
+case class HMEFmap(val functor: HMFunctor, val body: HMExpr) extends HMExpr {
+  if(functor.tarity != body.hmtype.tarity) throw new IRValidationException()
+  val hmtype: HMType = {
+    body.hmtype match {
+      case ((td --> tc)) => {
+        functor(td) --> functor(tc)
+      }
+      case _ => throw new IRValidationException()
+    }
+  }
+  def specialize(op: HMSpecialization): HMExpr = HMEFmap(functor.specialize(op), body.specialize(op))
+}
 
 

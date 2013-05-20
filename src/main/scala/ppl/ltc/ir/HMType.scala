@@ -32,10 +32,37 @@ object --> {
   }
 }
 
+/* functor type */
+case class HMFunctor(t: HMType) {
+  val tarity: Int = t.tarity - 1
+  if(tarity < 0) throw new IRValidationException()
+  def apply(u: HMType): HMType = {
+    t.specialize(HMSpecialization.last(u))
+  }
+  def specialize(op: HMSpecialization): HMFunctor = {
+    val opp = op.specialize(HMSpecialization.promote(op.tarity))
+    val ops = HMSpecialization(opp.tarity, opp.subs :+ HMTVariable(opp.tarity, op.tarity))
+    HMFunctor(t.specialize(ops))
+  }
+}
+
+/* companion object for type specialization */
+object HMSpecialization {
+  def last(t: HMType): HMSpecialization = {
+    HMSpecialization(t.tarity, (for(i <- 0 until t.tarity) yield HMTVariable(t.tarity, i)) :+ t)
+  }
+  def promote(tarity: Int): HMSpecialization = {
+    HMSpecialization(tarity, for(i <- 0 until tarity) yield HMTVariable(tarity + 1, i))
+  }
+}
+
 /* type specialization */
 case class HMSpecialization(val tarity: Int, val subs: Seq[HMType]) {
   for(s <- subs) {
     if(s.tarity != tarity) throw new IRValidationException()
+  }
+  def specialize(op: HMSpecialization): HMSpecialization = {
+    HMSpecialization(op.tarity, subs.map (a => a.specialize(op)))
   }
 }
 
