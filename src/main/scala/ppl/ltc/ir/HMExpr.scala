@@ -35,7 +35,25 @@ case class HMEFmap(val functor: HMFunctor, val body: HMExpr) extends HMExpr {
       case _ => throw new IRValidationException()
     }
   }
-  def specialize(op: HMSpecialization): HMExpr = HMEFmap(functor.specialize(op), body.specialize(op))
+  def specialize(op: HMSpecialization): HMExpr = {
+    HMEFmap(functor.specialize(op), body.specialize(op))
+  }
 }
 
+/* reduce/fold */
+case class HMEReduce(val functor: HMFunctor, val zero: HMExpr, val body: HMExpr) extends HMExpr {
+  if(functor.tarity != zero.hmtype.tarity) throw new IRValidationException()
+  if(functor.tarity != body.hmtype.tarity) throw new IRValidationException()
+  val hmtype: HMType = {
+    body.hmtype match {
+      case (zero.hmtype --> (tz --> zero.hmtype)) => {
+        functor(tz) --> zero.hmtype
+      }
+      case _ => throw new IRValidationException()
+    }
+  }
+  def specialize(op: HMSpecialization): HMExpr = {
+    HMEReduce(functor.specialize(op), zero.specialize(op), body.specialize(op))
+  }
+}
 
