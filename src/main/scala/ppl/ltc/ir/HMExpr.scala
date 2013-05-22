@@ -7,6 +7,14 @@ sealed trait HMExpr extends HMHasTypeVars[HMExpr] {
   val hmtype: HMType
 }
 
+/* function application */
+case class HMTApply(val fx: HMExpr, val arg: HMExpr) extends HMExpr {
+  val hmtype: HMType = (fx.hmtype, arg.hmtype) match {
+    case ((td --> tc), tx) if (tx == td) => tc
+    case _ => throw new IRValidationException()
+  }
+}
+
 /* a basic composition combinator */
 case class HMECompose(val fx1: HMExpr, val fx2: HMExpr) extends HMExpr {
   val hmtype: HMType = (fx1.hmtype, fx2.hmtype) match {
@@ -14,6 +22,10 @@ case class HMECompose(val fx1: HMExpr, val fx2: HMExpr) extends HMExpr {
     case _ => throw new IRValidationException()
   }
 }
+
+/* lambda */
+//it seems like all of the parallel collections we care about are monads,
+//in addition to being functors
 
 // /* fmap */
 // case class HMEFmap(val functor: HMFunctor, val body: HMExpr) extends HMExpr {
