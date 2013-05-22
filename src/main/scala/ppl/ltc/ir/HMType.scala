@@ -1,29 +1,25 @@
 package ppl.ltc.ir
 
 import scala.collection.immutable.Seq
+import scala.collection.immutable.Map
 
-
-trait HMType extends HMHasTypeVars[HMType] {
-  self: Product =>
-  /* helper method to construct a function type */
-  def -->(r: HMType): HMType = HMTFunction(this, r)
-  /* format this type, without binding variables */
-  def format: String
-  /* give the description of this type */
-  override def toString: String = {
-    var acc: String = ""
-    for(v <- freeVars) {
-      acc += "∀" + v.format + ". "
-    }
-    acc + format
+object HMType {
+  // gets a type variable that is not in this sequence
+  def getNewVar(vars: Seq[HMTypeVar]): HMTypeVar = {
+    HMTypeVar(vars.foldLeft(0)((a, u) => if (u.index < a) a else (u.index + 1)))
   }
 }
 
+trait HMType extends HMHasTypeVars[HMType] {
+  /* helper method to construct a function type */
+  def -->(r: HMType): HMType = HMTFunction(this, r)
+}
+
 case class HMTypeVar(index: Int) extends HMType {
-  def format: String = (0x03B1 + index).toChar.toString
-  override def freeVars: Set[HMTypeVar] = Set(this)
-  override def alphaSubstitute(sym: HMTypeVar, repl: HMType): HMType = {
-    if(sym == this) repl else this
+  override def toString: String = (0x03B1 + index).toChar.toString
+  override def freeVars: Seq[HMTypeVar] = Seq(this)
+  override def alphaSubstitute(repls: Map[HMTypeVar, HMType]): HMType = {
+    repls.getOrElse(this, this)
   }
 }
 
@@ -37,21 +33,6 @@ object --> {
 
 /* type application */
 case class HMTFunction(val domain: HMType, val codomain: HMType) extends HMType {
-  def format: String = "(" + domain.format + " ——> " + codomain.format + ")"
+  override def toString: String = "(" + domain.toString + " ——> " + codomain.toString + ")"
 }
 
-
-
-// /* functor type */
-// case class HMFunctor(t: HMType) {
-//   val tarity: Int = t.tarity - 1
-//   if(tarity < 0) throw new IRValidationException()
-//   def apply(u: HMType): HMType = {
-//     t.specialize(HMSpecialization.last(u))
-//   }
-//   def specialize(op: HMSpecialization): HMFunctor = {
-//     val opp = op.specialize(HMSpecialization.promote(op.tarity))
-//     val ops = HMSpecialization(opp.tarity, opp.subs :+ HMTVariable(opp.tarity, op.tarity))
-//     HMFunctor(t.specialize(ops))
-//   }
-// }
