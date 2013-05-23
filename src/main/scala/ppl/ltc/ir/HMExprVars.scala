@@ -4,17 +4,17 @@ import scala.collection.immutable.Seq
 import scala.collection.immutable.Map
 
 // this class contains the raw mechanics of the type system, including alpha substitution
-trait HMHasExprVars[T] extends HMHasTypeVars[T] {
+trait HMHasExprVars[T <: HMHasExprVars[T]] extends HMHasTypeVars[T] {
   // get the free variables for this type
-  def freeVars: Set[HMExprVar] = {
-    var rv = Set[HMExprVar]()
+  def freeVars: Seq[HMExprVar] = {
+    var rv = Seq[HMExprVar]()
     for(x <- this.asInstanceOf[Product].productIterator) {
       if(x.isInstanceOf[HMHasExprVars[_]]) {
-        rv = rv union x.asInstanceOf[HMHasExprVars[_]].freeVars
+        rv = rv ++ x.asInstanceOf[HMHasExprVars[_]].freeVars.filter(a => !rv.contains(a))
       }
     }
     // verify that each variable only has one canonical type
-    if(rv.size != (rv map (v => v.index)).size) throw new IRValidationException()
+    if(rv.size != (rv map (v => v.index)).toSet.size) throw new IRValidationException()
     // return rv
     rv
   }
@@ -22,6 +22,7 @@ trait HMHasExprVars[T] extends HMHasTypeVars[T] {
   def alphaSubstitute(src: HMExprVar, repl: HMExpr): T = alphaSubstitute(Map(src -> repl))
   // perform multiple alpha substitutions at once
   def alphaSubstitute(repls: Map[HMExprVar, HMExpr]): T = {
+    if(repls.size == 0) return this.asInstanceOf[T]
     for((src, repl) <- repls) {
       if(src.hmtype != repl.hmtype) throw new IRValidationException()
     }
@@ -35,7 +36,15 @@ trait HMHasExprVars[T] extends HMHasTypeVars[T] {
     reconstruct(Seq(ldx.toSeq:_*))
   }
   // produces canonical alpha renaming
-  def alphaRename: T = {
-    throw new IRValidationException()
+  def alphaRename: T = alphaRenameWith(freeVars)
+  // produces canonical alpha renaming, starting with symbol index idx (other symbols untouched)
+  def alphaRenameWith(bvs: Seq[HMExprVar]): T = {
+    val ldx = for(x <- this.asInstanceOf[Product].productIterator) yield {
+      x match {
+        case xx: HMHasExprVars[_] => xx.alphaRenameWith(bvs)
+        case _ => x
+      }
+    }
+    reconstruct(Seq(ldx.toSeq:_*))
   }
 }

@@ -4,7 +4,7 @@ import scala.collection.immutable.Seq
 import scala.collection.immutable.Map
 
 // this class contains the raw mechanics of the type system, including alpha substitution
-trait HMHasTypeVars[T] extends HasReconstruct[T] {
+trait HMHasTypeVars[T <: HMHasTypeVars[T]] extends HasReconstruct[T] {
   // get the free variables for this type
   def freeTypeVars: Seq[HMTypeVar] = {
     var rv = Seq[HMTypeVar]()

@@ -43,22 +43,34 @@ case class HMEFmap(val functor: HMFunctor, val body: HMExpr) extends HMExpr {
 /* lambda */
 case class HMELambda(val l: HMExprVar, val body: HMExpr) extends HMExpr {
   val hmtype: HMType = l.hmtype --> body.hmtype
-  override def freeVars: Set[HMExprVar] = {
+  override def freeVars: Seq[HMExprVar] = {
     val bfv = body.freeVars
-    if((bfv + l).size != ((bfv + l) map (v => v.index)).size) throw new IRValidationException()
-    bfv - l
+    if(bfv exists (v => ((v.index == l.index)&&(v.hmtype != l.hmtype)))) throw new IRValidationException()
+    bfv filter (v => (v != l))
   }
   override def alphaSubstitute(repls: Map[HMExprVar, HMExpr]): HMExpr = {
+    for(v <- body.freeVars) {
+      if((v != l)&&(repls.contains(v))&&(repls(v).freeVars contains l)) throw new IRValidationException()
+    }
     HMELambda(l, body.alphaSubstitute(repls - l))
+  }
+  override def alphaRenameWith(bvs: Seq[HMExprVar]): HMExpr = {
+    HMELambda(HMExprVar(l.hmtype, bvs.length), body.alphaRenameWith(bvs :+ l))
   }
   override def toString: String = "λ " + l.toString + ". " + body.toString
 }
 
 /* variable */
 case class HMExprVar(val hmtype: HMType, val index: Int) extends HMExpr {
-  override def freeVars: Set[HMExprVar] = Set(this)
+  override def freeVars: Seq[HMExprVar] = Seq(this)
   override def alphaSubstitute(repls: Map[HMExprVar, HMExpr]): HMExpr = {
     repls.getOrElse(this, this)
+  }
+  override def alphaRenameWith(bvs: Seq[HMExprVar]): HMExpr = {
+    for(i <- 0 until bvs.length) {
+      if (bvs(i) == this) return HMExprVar(hmtype, i)
+    }
+    throw new IRValidationException()
   }
   override def toString: String = ("a"(0) + index).toChar.toString
 }
