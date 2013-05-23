@@ -47,4 +47,16 @@ trait HMHasExprVars[T <: HMHasExprVars[T]] extends HMHasTypeVars[T] {
     }
     reconstruct(Seq(ldx.toSeq:_*))
   }
+  // to pointfree
+  def toPointfree: T = {
+    val ldx = for(x <- this.asInstanceOf[Product].productIterator) yield {
+      x match {
+        case xx: HMHasExprVars[_] => xx.toPointfree
+        case _ => x
+      }
+    }
+    reconstruct(Seq(ldx.toSeq:_*))
+  }
+  // lambda to pointfree
+  def lambdaToPointfree(r: HMExprVar): T
 }

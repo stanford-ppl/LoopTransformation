@@ -9,9 +9,16 @@ sealed trait HMExpr extends HMHasExprVars[HMExpr] {
 }
 
 /* identity function */
-case class HMTIdentity(val t: HMType) extends HMExpr {
+case class HMEIdentity(val t: HMType) extends HMExpr {
   val hmtype: HMType = (t --> t)
   override def toString: String = "id[" + t.toString + "]"
+  def lambdaToPointfree(r: HMExprVar): HMExpr = throw new IRValidationException()
+}
+
+/* constant function */
+case class HMEConst(val dom: HMType, val body: HMExpr) extends HMExpr {
+  val hmtype: HMType = (dom --> body.hmtype)
+  override def toString: String = "const[" + dom.toString + "](" + body.toString + ")"
 }
 
 /* function application */
@@ -58,6 +65,14 @@ case class HMELambda(val l: HMExprVar, val body: HMExpr) extends HMExpr {
     HMELambda(HMExprVar(l.hmtype, bvs.length), body.alphaRenameWith(bvs :+ l))
   }
   override def toString: String = "λ " + l.toString + ". " + body.toString
+  override def toPointfree: HMExpr = {
+    if(body.freeVars contains l) {
+      body.toPointfree.lambdaToPointfree(l)
+    }
+    else {
+      HMEConst(l.hmtype, body)
+    }
+  }
 }
 
 /* variable */
