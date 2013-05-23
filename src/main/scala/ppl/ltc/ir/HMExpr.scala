@@ -8,43 +8,16 @@ sealed trait HMExpr extends HMHasExprVars[HMExpr] {
   val hmtype: HMType
 }
 
-/* identity function */
-case class HMEIdentity(val t: HMType) extends HMExpr {
-  val hmtype: HMType = (t --> t)
-  override def toString: String = "id[" + t.toString + "]"
-  def lambdaToPointfree(r: HMExprVar): HMExpr = throw new IRValidationException()
-}
-
-/* constant function */
-case class HMEConst(val dom: HMType, val body: HMExpr) extends HMExpr {
-  val hmtype: HMType = (dom --> body.hmtype)
-  override def toString: String = "const[" + dom.toString + "](" + body.toString + ")"
-}
-
 /* function application */
-// case class HMTApply(val fx: HMExpr, val arg: HMExpr) extends HMExpr {
-//   val hmtype: HMType = (fx.hmtype, arg.hmtype) match {
-//     case ((td --> tc), tx) if (tx == td) => tc
-//     case _ => throw new IRValidationException()
-//   }
-// }
-
-/* a basic composition combinator */
-case class HMECompose(val fx1: HMExpr, val fx2: HMExpr) extends HMExpr {
-  val hmtype: HMType = (fx1.hmtype, fx2.hmtype) match {
-    case ((td1 --> tc1), (td2 --> tc2)) if (tc1 == td2) => (td1 --> tc2)
+case class HMEApply(val fx: HMExpr, val arg: HMExpr) extends HMExpr {
+  val hmtype: HMType = (fx.hmtype, arg.hmtype) match {
+    case ((td --> tc), tx) if (tx == td) => tc
     case _ => throw new IRValidationException()
   }
-  override def toString: String = "(" + fx1.toString + " ∘ " + fx2.toString + ")"
-}
+  override def toString: String = fx.toString + "(" + arg.toString + ")"
+  override def lambdaToPointfree(r: HMExprVar): HMExpr = {
 
-/* basic fmap function */
-case class HMEFmap(val functor: HMFunctor, val body: HMExpr) extends HMExpr {
-  val hmtype: HMType = body.hmtype match {
-    case (td --> tc) => (functor(td) --> functor(tc))
-    case _ => throw new IRValidationException()
-  }
-  override def toString: String = "fmap[" + functor.toString + "](" + body.toString + ")"
+  } 
 }
 
 /* lambda */
@@ -70,7 +43,7 @@ case class HMELambda(val l: HMExprVar, val body: HMExpr) extends HMExpr {
       body.toPointfree.lambdaToPointfree(l)
     }
     else {
-      HMEConst(l.hmtype, body)
+      HMEApply(HMEConst(body.hmtype, l.hmtype), body)
     }
   }
 }
@@ -88,6 +61,36 @@ case class HMExprVar(val hmtype: HMType, val index: Int) extends HMExpr {
     throw new IRValidationException()
   }
   override def toString: String = ("a"(0) + index).toChar.toString
+}
+
+
+/* identity function (I) */
+case class HMEIdentity(val t: HMType) extends HMExpr {
+  val hmtype: HMType = (t --> t)
+  override def toString: String = "id[" + t.toString + "]"
+  def lambdaToPointfree(r: HMExprVar): HMExpr = throw new IRValidationException()
+}
+
+/* constant function generator (K) */
+case class HMEConst(val a: HMType, val b: HMType) extends HMExpr {
+  val hmtype: HMType = (a --> (b --> a))
+  override def toString: String = "K[" + b.toString + "]"
+}
+
+/* substitution function (S) */
+case class HMESubstitute(val )
+
+/* a basic composition combinator */
+case class HMECompose(val a: HMType, val b: HMType, val c: HMType) extends HMExpr {
+  val hmtype: HMType = (a --> b) --> ((b --> c) --> (a --> c))
+  //override def toString: String = "(" + fx1.toString + " ∘ " + fx2.toString + ")"
+  override def toString: String = "(∘)"
+}
+
+/* basic fmap function */
+case class HMEFmap(val functor: HMFunctor, val a: HMType, val b: HMType) extends HMExpr {
+  val hmtype: HMType = (a --> b) --> (functor(a) --> functor(b))
+  override def toString: String = "fmap[" + functor.toString + "]"
 }
 
 //it seems like all of the parallel collections we care about are monads,

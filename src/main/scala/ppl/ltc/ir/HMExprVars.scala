@@ -58,5 +58,5 @@ trait HMHasExprVars[T <: HMHasExprVars[T]] extends HMHasTypeVars[T] {
     reconstruct(Seq(ldx.toSeq:_*))
   }
   // lambda to pointfree
-  def lambdaToPointfree(r: HMExprVar): T
+  def lambdaToPointfree(r: HMExprVar): T = throw new IRValidationException()
 }
