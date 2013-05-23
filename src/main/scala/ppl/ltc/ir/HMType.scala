@@ -17,8 +17,8 @@ trait HMType extends HMHasTypeVars[HMType] {
 
 case class HMTypeVar(index: Int) extends HMType {
   override def toString: String = (0x03B1 + index).toChar.toString
-  override def freeVars: Seq[HMTypeVar] = Seq(this)
-  override def alphaSubstitute(repls: Map[HMTypeVar, HMType]): HMType = {
+  override def freeTypeVars: Seq[HMTypeVar] = Seq(this)
+  override def alphaTypeSubstitute(repls: Map[HMTypeVar, HMType]): HMType = {
     repls.getOrElse(this, this)
   }
 }
