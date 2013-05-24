@@ -16,6 +16,20 @@ sealed trait HType {
     case TArrow(d, c) => TArrow(d.subst(m), c.subst(m))
     case TFunctor(f, t) => TFunctor(f, t.subst(m))
   }
+  def params: Seq[Int] = this match {
+    case TInt() => Seq()
+    case TParam(i) => Seq(i)
+    case TArrow(d, c) => {
+      val dp = d.params
+      dp ++ c.params.filter(p => !dp.contains(p))
+    }
+    case TFunctor(f, t) => t.params
+  }
+  //renames the params in this type to be "canonical"
+  def canonicalize: HType = {
+    val pp = params
+    subst(Map((for(i <- 0 until pp.length) yield (pp(i) -> TParam(i))):_*))
+  }
 }
 object --> {
   def unapply(t: HType): Option[Tuple2[HType, HType]] = t match {
