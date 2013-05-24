@@ -1,2 +1,3 @@
 name := "looptransformation"
+
 scalacOptions += "-deprecation"

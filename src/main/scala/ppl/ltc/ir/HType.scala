@@ -6,8 +6,9 @@ sealed trait HType {
   override def toString: String = this match {
     case TInt() => "Int"
     case TParam(i) => ("α"(0) + i).toChar.toString
-    case TArrow(d, c) => "(" + d.toString + " --> " + c.toString + ")"
     case TFunctor(f, t) => f.toString + "[" + t.toString + "]"
+    case TArrow(d: TArrow, c) => "(" + d.toString + ") --> " + c.toString
+    case TArrow(d, c) => d.toString + " --> " + c.toString
   }
   def -->(c: HType): HType = TArrow(this, c)
   def subst(m: Map[Int, HType]): HType = this match {
