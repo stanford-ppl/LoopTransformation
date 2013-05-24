@@ -1,1 +1,2 @@
 name := "looptransformation"
+scalacOptions += "-deprecation"

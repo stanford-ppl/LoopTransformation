@@ -10,11 +10,3 @@ trait HasReconstruct[T <: HasReconstruct[T]] {
     mcp(0).invoke(this, (data map (d => d.asInstanceOf[java.lang.Object])):_*).asInstanceOf[T]    
   }
 }
-
-object ConsoleStuff {
-  val a = HMTypeVar(0)
-  val b = HMTypeVar(1)
-  val c = HMTypeVar(2)
-  val d = HMTypeVar(3)
-  val e = HMTypeVar(4)
-}
