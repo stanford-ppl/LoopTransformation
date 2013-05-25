@@ -4,27 +4,20 @@ import scala.collection._
 
 sealed trait HType {
   override def toString: String = this match {
-    case TInt() => "Int"
     case TParam(i) => ("α"(0) + i).toChar.toString
-    case TFunctor(f, t) => f.toString + "[" + t.toString + "]"
-    case TArrow(d: TArrow, c) => "(" + d.toString + ") --> " + c.toString
-    case TArrow(d, c) => d.toString + " --> " + c.toString
+    case ((d @ (a --> b)) --> c) => "(" + d.toString + ") ——> " + c.toString
+    case (d --> c) => d.toString + " ——> " + c.toString
+    case TApp(f, Seq()) => f.toString
+    case TApp(f, s) => f.toString + s.mkString("[", ",", "]")
   }
-  def -->(c: HType): HType = TArrow(this, c)
+  def -->(c: HType): HType = TApp(DArrow, immutable.Seq(this, c))
   def subst(m: Map[Int, HType]): HType = this match {
-    case TInt() => this
     case TParam(i) => m.getOrElse(i, this)
-    case TArrow(d, c) => TArrow(d.subst(m), c.subst(m))
-    case TFunctor(f, t) => TFunctor(f, t.subst(m))
+    case TApp(f, a) => TApp(f, a map (_.subst(m)))
   }
   def params: Seq[Int] = this match {
-    case TInt() => Seq()
     case TParam(i) => Seq(i)
-    case TArrow(d, c) => {
-      val dp = d.params
-      dp ++ c.params.filter(p => !dp.contains(p))
-    }
-    case TFunctor(f, t) => t.params
+    case TApp(f, a) => a.foldLeft(Seq[Int]())((a, u) => a ++ u.params.filter(p => !a.contains(p)))
   }
   //renames the params in this type to be "canonical"
   def canonicalize: HType = {
@@ -34,12 +27,25 @@ sealed trait HType {
 }
 object --> {
   def unapply(t: HType): Option[Tuple2[HType, HType]] = t match {
-    case TArrow(d, c) => Some((d, c))
+    case TApp(DArrow, Seq(d, c)) => Some((d, c))
     case _ => None
   }
 }
 
-case class TInt() extends HType
-case class TArrow(domain: HType, codomain: HType) extends HType
 case class TParam(id: Int) extends HType
-case class TFunctor(f: HFunctor, t: HType) extends HType
+case class TApp(d: HTypeFunction, args: immutable.Seq[HType]) extends HType {
+  if(d.arity != args.length) throw new IRValidationException()
+}
+
+sealed trait HTypeFunction { 
+  val arity: Int
+  override def toString: String = this.getClass.getName.split("\\$").last.split("\\.").last.drop(1)
+}
+
+object DArrow extends HTypeFunction { val arity = 2 }
+object DInt extends HTypeFunction { val arity = 0 }
+object DList extends HTypeFunction { val arity = 1 }
+case class DDiagonal(size: Int) extends HTypeFunction { 
+  val arity = 1
+  override def toString: String = "∇_" + size.toString
+} 

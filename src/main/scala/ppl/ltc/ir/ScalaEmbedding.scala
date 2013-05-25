@@ -9,6 +9,7 @@ class ScalaEmbedding {
     rv
   }
 
+
   def elambda(e: EVar => HExpr): HExpr = {
     val n = freshVar
     ELambda(n, e(EVar(n)))

@@ -1,12 +1,17 @@
 package ppl.ltc.ir
 
+import collection.immutable.Seq
 
-trait HFunctor
+trait HFunctor {
+  def apply(t: HType): HType
+}
 
-case class FList() extends HFunctor {
-  override def toString: String = "list"
+object FList extends HFunctor {
+  def apply(t: HType): HType = TApp(DList, Seq(t))
+  override def toString: String = DList.toString
 }
 case class FDiagonal(size: Int) extends HFunctor {
-  override def toString: String = "∇_" + size.toString
+  def apply(t: HType): HType = TApp(DDiagonal(size), Seq(t))
+  override def toString: String = DDiagonal(size).toString
 }
 

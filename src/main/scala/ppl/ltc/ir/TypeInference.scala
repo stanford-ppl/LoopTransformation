@@ -6,10 +6,8 @@ class TypeInferenceException(msg: String) extends Exception(msg)
 
 object TypeInference {
   def occurs(t: HType, id: Int): Boolean = t match {
-    case TParam(i) if i == id => true
-    case TArrow(d, c) => occurs(d, id) || occurs(c, id)
-    case TFunctor(f, u) => occurs(u, id)
-    case _ => false
+    case TParam(i) => (i == id)
+    case TApp(f, a) => a.exists(occurs(_, id))
   }
 }
 
@@ -41,11 +39,11 @@ class TypeInference {
       constraints.push((t2 --> tf, t1))
       tf
     }
-    case EInt(v) => TInt()
+    case EInt(v) => TApp(DInt, immutable.Seq())
     case EFmap(f) => {
       val ta = fresh
       val tb = fresh
-      (ta --> tb) --> (TFunctor(f, ta) --> TFunctor(f, tb))
+      (ta --> tb) --> (f(ta) --> f(tb))
     }
   }
 
@@ -68,12 +66,8 @@ class TypeInference {
           acc.transform{case (k, t) => t.subst(m)}
           acc += (i -> t)
         }
-        case ((ta1 --> ta2), (tb1 --> tb2)) => {
-          constraints.push((ta1, tb1))
-          constraints.push((ta2, tb2))
-        }
-        case (TFunctor(f1, t1), TFunctor(f2, t2)) if f1 == f2 => {
-          constraints.push((t1, t2))
+        case (TApp(f1, a1), TApp(f2, a2)) if f1 == f2 => {
+          constraints.pushAll(a1.zip(a2))
         }
         case _ => throw new TypeInferenceException("could not unify constraint: " + c.toString)
       }
