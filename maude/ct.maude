@@ -1,0 +1,54 @@
+fmod HOM{A :: TRIV, B :: TRIV} is
+  sort Hom{A, B} .
+endfm
+
+*** Judging from this, handling the typing is going to be nontrivial
+
+fmod COMPOSE{A :: TRIV, B :: TRIV, C :: TRIV} is
+  protecting HOM{A, B} .
+  protecting HOM{B, C} .
+  protecting HOM{A, C} .
+  op _;_ : Hom{A, B} Hom{B, C} -> Hom{A, C} [gather (E e)] .
+endfm
+
+fmod COMPOSE-ASSOC{A :: TRIV, B :: TRIV, C :: TRIV, D :: TRIV} is
+  protecting COMPOSE{A, B, C} .
+  protecting COMPOSE{A, C, D} .
+  protecting COMPOSE{B, C, D} .
+  protecting COMPOSE{A, B, D} .
+  var f : Hom{A, B} .
+  var g : Hom{B, C} .
+  var h : Hom{C, D} .
+  eq f ; (g ; h) = f ; g ; h .
+endfm
+
+fmod ID{A :: TRIV} is
+  protecting HOM{A, A} .
+  op id : -> Hom{A, A} .
+endfm
+
+fmod W is sort W . endfm
+view W from TRIV to W is sort Elt to W . endv
+fmod X is sort X . endfm
+view X from TRIV to X is sort Elt to X . endv
+fmod Y is sort Y . endfm
+view Y from TRIV to Y is sort Elt to Y . endv
+fmod Z is sort Z . endfm
+view Z from TRIV to Z is sort Elt to Z . endv
+
+fmod SAMPLE is
+  protecting COMPOSE-ASSOC{W,X,Y,Z} .
+  var f : Hom{W, X} .
+  var g : Hom{X, Y} .
+  var h : Hom{Y, Z} .
+endfm
+
+*** (
+
+fmod CATEGORY-THEORY is
+  sorts X Y .
+  vars f : Hom{X, Y} .
+  op id : -> Hom{A, A} .
+  eq f . id = id .
+endfm
+*** )
