@@ -1,6 +1,8 @@
 package ppl.ltc.ir
 
 // peephole rewriter
+
+// ezyang: this rewriter doesn't have type information
 object Rewriter {
   def rewrite(x: HExpr): HExpr = {
     for(p <- primitives) {
@@ -73,6 +75,9 @@ object RRComposeIdentity extends RewriteRule {
   }
 }
 
+// ezyang: I think what we want to do is unfuse all fmaps before
+// re-fusing them, since a composition of completely point-wise fmaps
+// is a canonical form in some sense
 object RRFmapFusion extends RewriteRule {
   def apply(x: HExpr): HExpr = x match {
     case EApply(EFmap(f1), x1) ∘ EApply(EFmap(f2), x2) if (f1 == f2) => {
