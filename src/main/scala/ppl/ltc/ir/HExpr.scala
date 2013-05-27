@@ -54,3 +54,19 @@ case class EDouble(value: Double) extends EPrimitive {
   override def htype: HType = DDouble()
 }
 
+case class EFilter(f: HFunctor) extends EPrimitive {
+  override def toString: String = "filter{" + f.toString + "}"
+  override def htype: HType = {
+    val a = TParam(0)
+    DProduct(DBool(), a) --> DList(a)
+  }
+}
+case class EZip(f: HFunctorRepresentable) extends EPrimitive {
+  override def toString: String = "zip{" + f.toString + "}"
+  override def htype: HType = {
+    val a = TParam(0)
+    val b = TParam(1)
+    f(a) --> (f(b) --> f(DProduct(a, b)))
+  }
+}
+

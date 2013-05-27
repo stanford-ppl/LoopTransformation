@@ -48,6 +48,8 @@ sealed trait HTypeFunction {
 
 object DArrow extends HTypeFunction { val arity = 2 }
 
+object DProduct extends HTypeFunction { val arity = 2 }
+
 object DList extends HTypeFunction { val arity = 1 }
 case class DDiagonal(size: Int) extends HTypeFunction { 
   val arity = 1
