@@ -10,7 +10,7 @@ sealed trait HType {
     case TApp(f, Seq()) => f.toString
     case TApp(f, s) => f.toString + s.mkString("[", ",", "]")
   }
-  def -->(c: HType): HType = TApp(DArrow, immutable.Seq(this, c))
+  def -->(c: HType): HType = DArrow(this, c)
   def subst(m: Map[Int, HType]): HType = this match {
     case TParam(i) => m.getOrElse(i, this)
     case TApp(f, a) => TApp(f, a map (_.subst(m)))
@@ -39,6 +39,10 @@ case class TApp(d: HTypeFunction, args: immutable.Seq[HType]) extends HType {
 
 sealed trait HTypeFunction { 
   val arity: Int
+  def apply(args: HType*): HType = {
+    if(args.length != arity) throw new IRValidationException()
+    TApp(this, immutable.Seq(args:_*))
+  }
   override def toString: String = this.getClass.getName.split("\\$").last.split("\\.").last.drop(1)
 }
 

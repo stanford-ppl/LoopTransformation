@@ -43,14 +43,14 @@ case class EFmap(f: HFunctor) extends EPrimitive {
 }
 case class EInt(value: Int) extends EPrimitive {
   override def toString: String = value.toString
-  override def htype: HType = TApp(DInt, immutable.Seq[HType]())
+  override def htype: HType = DInt()
 }
 case class EBool(value: Boolean) extends EPrimitive {
   override def toString: String = value.toString
-  override def htype: HType = TApp(DBool, immutable.Seq[HType]())
+  override def htype: HType = DBool()
 }
 case class EDouble(value: Double) extends EPrimitive {
   override def toString: String = value.toString
-  override def htype: HType = TApp(DDouble, immutable.Seq[HType]())
+  override def htype: HType = DDouble()
 }
 
