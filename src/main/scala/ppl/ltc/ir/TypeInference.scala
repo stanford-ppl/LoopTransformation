@@ -46,20 +46,21 @@ class TypeInference {
     }
   }
 
+  object TParamEx {
+    def unapply(c:(HType, HType)):Option[(Int, HType)] = c match {
+      case (TParam(i), t) => Some (i, t)
+      case (t, TParam(i)) => Some (i, t)
+      case _ => None
+    }
+  }
+
   def solve: Map[Int, HType] = {
     val acc = mutable.Map[Int, HType]()
     while(constraints.size > 0) {
       val c = constraints.pop()
       c match {
         case (t1, t2) if t1 == t2 => 
-        //TODO: need to figure out how to do the order-invariant-tuples correctly in scala
-        case (TParam(i), t) if !occurs(t, i) => {
-          val m = Map(i -> t)
-          constraints.transform{case (ta, tb) => (ta.subst(m), tb.subst(m))}
-          acc.transform{case (k, t) => t.subst(m)}
-          acc += (i -> t)
-        }
-        case (t, TParam(i)) if !occurs(t, i) => {
+        case TParamEx(i, t) if !occurs(t, i) => {
           val m = Map(i -> t)
           constraints.transform{case (ta, tb) => (ta.subst(m), tb.subst(m))}
           acc.transform{case (k, t) => t.subst(m)}
