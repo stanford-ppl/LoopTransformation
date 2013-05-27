@@ -7,7 +7,7 @@ object PrettyPrint {
     val (opri, rv) = hexpr match {
       case x if x == Functions.const => (0, "K")
       case x if x == Functions.identity => (0, "I")
-      case EApply(EApply(x, a), b) if x == Functions.compose => (2, pprint(a, 3) + " ∘ " + pprint(b, 2))
+      case a ∘ b => (2, pprint(a, 1) + " ∘ " + pprint(b, 2))
       case x if x == Functions.compose => (0, "(∘)")
       case EVar(n) => (0, n.toString)
       case EInt(v) => (0, v.toString)

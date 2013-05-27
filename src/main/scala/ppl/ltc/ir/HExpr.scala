@@ -16,9 +16,10 @@ sealed trait HExpr {
     case _ => false
   }
   def apply(y: HExpr): HExpr = EApply(this, y)
-  def ∘(y: HExpr): HExpr = {
+  def compose(y: HExpr): HExpr = {
     EApply(EApply(Functions.compose, this), y)
   }
+  def ∘(y: HExpr): HExpr = this.compose(y)
 }
 
 case class EVar(name: HName) extends HExpr

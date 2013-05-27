@@ -33,7 +33,7 @@ object Rewriter {
     }
   }
 
-  def rules: Seq[RewriteRule] = Seq(RRConst, RRCompose, RRIdentity, RRComposeIdentity, RRFmapFusion)
+  def rules: Seq[RewriteRule] = Seq(RRConst, RRCompose, RRIdentity, RRComposeIdentity, RRFmapFusion, RRComposeAssocRight)
   def primitives: Seq[HExpr] = Seq(Functions.const, Functions.compose, Functions.identity)
 }
 
@@ -77,6 +77,13 @@ object RRFmapFusion extends RewriteRule {
     case EApply(EFmap(f1), x1) ∘ EApply(EFmap(f2), x2) if (f1 == f2) => {
       EApply(EFmap(f1), x1 ∘ x2)
     }
+    case _ => x
+  }
+}
+
+object RRComposeAssocRight extends RewriteRule {
+  def apply(x: HExpr): HExpr = x match {
+    case (f ∘ g) ∘ h => f ∘ (g ∘ h)
     case _ => x
   }
 }
