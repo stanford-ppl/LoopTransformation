@@ -39,11 +39,10 @@ class TypeInference {
       constraints.push((t2 --> tf, t1))
       tf
     }
-    case EInt(v) => TApp(DInt, immutable.Seq())
-    case EFmap(f) => {
-      val ta = fresh
-      val tb = fresh
-      (ta --> tb) --> (f(ta) --> f(tb))
+    case x: EPrimitive => {
+      val xt = x.htype
+      val xtpp = xt.params
+      xt.subst(Map((for(p <- xtpp) yield (p -> fresh)):_*))
     }
   }
 

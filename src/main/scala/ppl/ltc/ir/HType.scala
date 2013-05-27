@@ -43,9 +43,13 @@ sealed trait HTypeFunction {
 }
 
 object DArrow extends HTypeFunction { val arity = 2 }
-object DInt extends HTypeFunction { val arity = 0 }
+
 object DList extends HTypeFunction { val arity = 1 }
 case class DDiagonal(size: Int) extends HTypeFunction { 
   val arity = 1
   override def toString: String = "∇_" + size.toString
-} 
+}
+
+object DInt extends HTypeFunction { val arity = 0 }
+object DBool extends HTypeFunction { val arity = 0 }
+object DDouble extends HTypeFunction { val arity = 0 }
