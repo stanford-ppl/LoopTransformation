@@ -4,6 +4,7 @@ import collection.immutable.Seq
 
 trait HFunctor {
   def apply(t: HType): HType
+  def apply(x: HExpr): HExpr = EApply(EFmap(this), x)
 }
 
 object FList extends HFunctor {

@@ -66,8 +66,8 @@ object RRIdentity extends RewriteRule {
 
 object RRComposeIdentity extends RewriteRule {
   def apply(x: HExpr): HExpr = x match {
-    case EApply(EApply(Functions.compose, Functions.identity), a) => a
-    case EApply(EApply(Functions.compose, a), Functions.identity) => a
+    case Functions.identity ∘ a => a
+    case a ∘ Functions.identity => a
     case _ => x
   }
 }
