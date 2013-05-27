@@ -4,7 +4,7 @@ import scala.collection._
 
 sealed trait HType {
   override def toString: String = this match {
-    case TParam(i) => ("α"(0) + i).toChar.toString
+    case TParam(i) => ('α' + i).toChar.toString
     case ((d @ (a --> b)) --> c) => "(" + d.toString + ") ——> " + c.toString
     case (d --> c) => d.toString + " ——> " + c.toString
     case TApp(f, Seq()) => f.toString
