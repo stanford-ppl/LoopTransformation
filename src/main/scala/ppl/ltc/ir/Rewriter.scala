@@ -1,5 +1,6 @@
 package ppl.ltc.ir
 
+// peephole rewriter
 object Rewriter {
   def rewrite(x: HExpr): HExpr = {
     for(p <- primitives) {
