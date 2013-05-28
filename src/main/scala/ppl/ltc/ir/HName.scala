@@ -16,5 +16,4 @@ case class HNameSI(name: String, index: Int) extends HName {
   if(name contains "_") throw new IRValidationException()
 }
 case class HNameI(index: Int) extends HName
-trait HNamePrim extends HName
 

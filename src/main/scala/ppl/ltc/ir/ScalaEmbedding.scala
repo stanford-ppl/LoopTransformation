@@ -1,5 +1,6 @@
 package ppl.ltc.ir
 
+import scala.language.implicitConversions
 
 object ScalaEmbedding {
   class SCESym(val s: String)
