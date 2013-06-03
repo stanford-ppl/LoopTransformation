@@ -43,7 +43,6 @@ data Type = TVar (Name Type)
           | TArr Type Type
           | TLambda Kind (Bind (Name Type) Type)
           | TApp Type Type
-          | TMu Type
           | TForall Type
     deriving (Show)
 
@@ -52,8 +51,6 @@ data Expr = Var (Name Expr)
           | App Expr Expr
           | TyLambda Kind (Bind (Name Type) Expr)
           | TyApp Expr Type
-          | Fold Expr Expr
-          | Roll Type Expr
     deriving (Show)
 
 -- UNBOUND NONSENSE
@@ -131,7 +128,6 @@ beta (TApp (TLambda _ b) t2) = do
 beta (TApp t1 t2) =
         TApp <$> beta t1 <*> pure t2
     <|> TApp <$> pure t1 <*> beta t2
-beta (TMu t) = TMu <$> beta t
 beta (TForall t) = TForall <$> beta t
 
 -- More efficient technique is "normalization by evaluation"
@@ -160,11 +156,10 @@ polarityOf m x (TApp t1 t2) = do
     case k of
         KArr p _ _ -> return (lub p1 (p * p2))
         _ -> throwError ("polarityOf: ill-kinded type application of " ++ ppshow t1 ++ " and " ++ ppshow t2)
-polarityOf m x (TMu t) = polarityOf m x t -- I hope this is right!
 polarityOf m x (TForall t) = polarityOf m x t
 
 kindOf :: Map (Name Type) Kind -> Type -> M Kind
-kindOf m (TVar n) = maybe (throwError "kindOf: unbound variable") return (Map.lookup n m)
+kindOf m (TVar n) = maybe (throwError ("kindOf: unbound variable " ++ show n)) return (Map.lookup n m)
 kindOf m (TLambda k p) = do
     lunbind p $ \(n, t) -> do
     let m' = Map.insert n k m
@@ -181,15 +176,8 @@ kindOf m (TApp t1 t2) = do
     k2 <- kindOf m t2
     case k1 of
         KArr _ k11 k12 | k11 `aeq` k2 -> return k12
-                       | otherwise -> throwError ("kindOf: could not unify " ++ ppshow k11 ++ " and " ++ ppshow k2)
+                       | otherwise -> throwError ("kindOf: could not unify " ++ ppshow k11 ++ " and " ++ ppshow k2 ++ " in " ++ ppshow (TApp t1 t2))
         _ -> throwError ("kindOf: attempt to apply to non-arrow kind " ++ ppshow t1 ++ " : " ++ ppshow k1)
-kindOf m (TMu t) = do
-    k <- kindOf m t
-    case k of
-        KArr Positive k1 k2 | k1 `aeq` k2 -> return k1
-                            | otherwise -> throwError "kindOf: cannot take fixpoint of non-endomorphic operator"
-        KArr _ _ _ -> throwError "kindOf: cannot take fixpoint of non-positive operator"
-        _ -> throwError ("kindOf: cannot take fixpoint of " ++ ppshow k)
 kindOf m (TForall t) = do
     k <- kindOf m t
     case k of
@@ -233,20 +221,6 @@ typeOf' km m (TyApp e t) = do
                 lunbind b $ \(n, t') -> return (subst n t t')
             | otherwise -> throwError ("typeOf: could not unify kinds " ++ ppshow k ++ " and " ++ ppshow k')
         _ -> throwError "typeOf: cannot apply to non-universal quantifier"
-typeOf' km m (Fold e1 e2) = do
-    ta <- typeOf km m e1
-    tb <- typeOf km m e2
-    case (ta, tb) of
-        (TArr t1 t1', TMu t2) -> do
-            t2' <- normalize (TApp t2 t1')
-            unless (t1 `aeq` t2') $ throwError ("typeOf: could not unify " ++ ppshow t1 ++ " and " ++ ppshow t2 ++ " applied to " ++ ppshow t1')
-            return t1'
-        _ -> throwError "typeOf: folder must be a function"
-typeOf' km m (Roll t e) = do
-    ta <- typeOf km m e
-    ta' <- normalize (TApp t (TMu t))
-    unless (ta `aeq` ta') $ throwError "typeOf: cannot unify for roll"
-    return (TMu t)
 
 -- PRETTY PRINTING
 
@@ -270,7 +244,6 @@ instance Pretty Type where
     ppr _ (TVar n) = return (PP.text (show n))
     ppr p (TArr t1 t2) = prettyParen (p > 0) <$> (parr <$> ppr 1 t1 <*> ppr 0 t2)
     ppr p (TForall t) = pbinder p "∀" t
-    ppr p (TMu t) = pbinder p "μ" t
     ppr p (TLambda k b) = pbinds p "Λ" k b
     ppr p (TApp t1 t2) = papp p t1 t2
 
@@ -280,8 +253,6 @@ instance Pretty Expr where
     ppr p (App e1 e2) = papp p e1 e2
     ppr p (TyLambda k b) = pbinds p "Λ" k b
     ppr p (TyApp e t) = papp p e t
-    ppr p (Fold e1 e2) = ppr p (App (App (var "fold") e1) e2)
-    ppr p (Roll t e) = ppr p (App (TyApp (var "roll") t) e)
 
 instance Pretty a => Pretty (Either String a) where
     ppr _ (Left err) = return (PP.text ("ERROR " ++ err))
@@ -311,6 +282,9 @@ var = Var . string2Name
 tvar = TVar . string2Name
 forall k x e = TForall (tylam k x e)
 phi f1 f2 = forall "a" KType (f1 # "a" ~> f2 # "a")
+-- no let polymorphism
+elet x v t e  = App (Lambda t (bind (string2Name x) e)) v
+tlet x v k t  = TApp (TLambda k (bind (string2Name x) t)) v
 
 class SynApp a where (#) :: a -> a -> a
 instance SynApp Expr where (#) = App
@@ -325,41 +299,47 @@ instance IsString Type where fromString = tvar
 
 -- EXAMPLES
 
+env = tlam "μ"    ((KType ~> KType) ~> KType)
+    . lam  "fold" (forall "r" KType . forall "f" (KType ~> KType) $ ("f" # "r" ~> "r") ~> "μ" # "f" ~> "r")
+    . lam  "roll" (forall "f" (KType ~> KType) $ "f" # ("μ" # "f") ~> "μ" # "f")
+    . tlam "Prod" (KType ~> KType ~> KType)
+    . tlam "Int"  KType
+    . lam  "fmap" (forall "f" (KType ~> KType) (forall "a" KType (forall "b" KType (("a" ~> "b") ~> ("f" # "a" ~> "f" # "b")))))
+
 exIdentity = tlam "a" KType
-           . lam "x" "a"
+           . lam  "x" "a"
            $ var "x"
 
-exFold = tlam "r" KType
-       . tlam "f" (KType ~> KType)
-       . lam "f" ("f" # "r" ~> "r")
-       . lam "xs" (TMu "f")
-       $ Fold "f" "xs"
+exFold = env
+       . tlam "r"  KType
+       . tlam "f"  (KType ~> KType)
+       . lam  "f"  ("f" # "r" ~> "r")
+       . lam  "xs" ("μ" # "f")
+       $ "fold" & "r" & "f" # "f" # "xs"
 
-exRoll = tlam "natf" (KType ~> KType)
-       . lam "n" (TMu "natf")
-       . lam "succ" (forall "n" KType ("n" ~> "natf" # "n"))
-       $ Roll "natf" ("succ" & TMu "natf" # "n")
+exRoll = env
+       . tlam "NatF" (KType ~> KType)
+       . lam  "n"    ("μ" # "NatF")
+       . lam  "succ" (forall "n" KType ("n" ~> "NatF" # "n"))
+       $ "roll" & "NatF" # ("succ" & ("μ" # "NatF") # "n")
 
-exBlog = tlam "D_i" (KType ~> KType)
+exBlog = env
+       . tlam "D_i" (KType ~> KType)
        . tlam "D_j" (KType ~> KType)
-       . tlam "prod" (KType ~> KType ~> KType)
        . tlam "Ix_i" KType
        . tlam "Ix_j" KType
-       . tlam "Int" KType
-       . tlam "ListF" ((KType ~> KType) ~> KType ~> KType)
-       . lam "fmap" (forall "f" (KType ~> KType) (forall "a" KType (forall "b" KType (("a" ~> "b") ~> ("f" # "a" ~> "f" # "b")))))
+       . tlam "ListF" (KType ~> KType ~> KType)
        -- . lam "di2list" ("D_i" `phi` TMu "ListF")
        -- . lam "dj2list" ("D_j" `phi` TMu "ListF")
        -- . lam "tabulate_di" ((tylam KType "a" ("Ix_i" ~> "a")) `phi` "D_i")
        -- . lam "index_di" ("D_i" `phi` (tylam "a" KType ("Ix_i" ~> "a")))
        . lam "tabulate_dj" ((tylam "a" KType ("Ix_j" ~> "a")) `phi` "D_j")
        -- . lam "index_dj" ("D_j" `phi` (tylam "a" KType ("Ix_j" ~> "a")))
-       . lam "bucket" ("D_i" # "Ix_j" ~> "D_i" `phi` (tylam "a" KType ("D_j" # (TMu "ListF" # "a"))))
-       . lam "divide" ("prod" # "Int" # "Int" ~> "Int")
-       . lam "plusinc" ("ListF" # (tylam "a" KType $ "prod" # "a" # "a") # "Int" ~> "prod" # "Int" # "Int")
+       . lam "bucket" ("D_i" # "Ix_j" ~> "D_i" `phi` (tylam "a" KType ("D_j" # ("μ" # ("ListF" # "a")))))
+       . lam "divide" ("Prod" # "Int" # "Int" ~> "Int")
+       . lam "plusinc" ("ListF" # "Int" # ("Prod" # "Int" # "Int") ~> "Prod" # "Int" # "Int")
        . lam "pi" ("Ix_j" ~> "D_j" `phi` (tylam "a" KType "a"))
        . lam "zero" "Int"
        . lam "x" ("D_i" # "Int")
        . lam "c" ("D_i" # "Ix_j")
-       $ "tabulate_dj" & "Int" # lam "j" "Ix_j" ("divide" # Fold "plusinc" ("pi" # "j" & {- some of the wheels have fallen off -} (TMu "ListF" # "Int") # (("bucket" # "c" & "Int") # "x")))
-
+       $ "tabulate_dj" & "Int" # lam "j" "Ix_j" ("divide" # ("fold" & ("Prod" # "Int" # "Int") & ("ListF" # "Int") # "plusinc" # ("pi" # "j" & {- some of the wheels have fallen off -} ("μ" # ("ListF" # "Int")) # (("bucket" # "c" & "Int") # "x"))))
