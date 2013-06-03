@@ -16,9 +16,11 @@ import qualified Data.Map as Map
 import Control.Monad.Trans.Maybe
 import Control.Applicative
 import Control.Monad
+import Control.Monad.Error
 import qualified Text.PrettyPrint as PP
 import Text.PrettyPrint (Doc, (<+>), (<>))
 import Data.String
+-- import Debug.Trace
 
 -- * Implementation of polarity is as described in Martin Steffen's
 --   thesis, but with subtyping omitted (we use the stratified kind
@@ -109,7 +111,7 @@ instance Num Polarity where
 done :: MonadPlus m => m a
 done = mzero
 
-type M = FreshM
+type M = ErrorT String LFreshM
 
 -- EVALUATION AND TYPE CHECKING
 
@@ -120,11 +122,11 @@ beta (TArr t1 t2) =
         TArr <$> beta t1 <*> pure t2
     <|> TArr <$> pure t1 <*> beta t2
 beta (TLambda k b) = do
-        (x, t) <- unbind b
+        lunbind b $ \(x, t) -> do
         t' <- beta t
         return (TLambda k (bind x t'))
 beta (TApp (TLambda _ b) t2) = do
-        (n, t1) <- unbind b
+        lunbind b $ \(n, t1) -> do
         return $ subst n t2 t1
 beta (TApp t1 t2) =
         TApp <$> beta t1 <*> pure t2
@@ -149,7 +151,7 @@ polarityOf m x (TArr t1 t2) = do
     p2 <- polarityOf m x t2
     return (lub (-p1) p2)
 polarityOf m x (TLambda k b) = do
-    (n, t) <- unbind b
+    lunbind b $ \(n, t) -> do
     polarityOf (Map.insert n k m) x t
 polarityOf m x (TApp t1 t2) = do
     k <- kindOf m t1
@@ -157,45 +159,46 @@ polarityOf m x (TApp t1 t2) = do
     p2 <- polarityOf m x t2
     case k of
         KArr p _ _ -> return (lub p1 (p * p2))
-        _ -> error "polarityOf: ill-kinded type application"
+        _ -> throwError ("polarityOf: ill-kinded type application of " ++ ppshow t1 ++ " and " ++ ppshow t2)
 polarityOf m x (TMu t) = polarityOf m x t -- I hope this is right!
 polarityOf m x (TForall t) = polarityOf m x t
 
 kindOf :: Map (Name Type) Kind -> Type -> M Kind
-kindOf m (TVar n) = maybe (error "kindOf: unbound variable") return (Map.lookup n m)
+kindOf m (TVar n) = maybe (throwError "kindOf: unbound variable") return (Map.lookup n m)
 kindOf m (TLambda k p) = do
-    (n, t) <- unbind p
+    lunbind p $ \(n, t) -> do
     let m' = Map.insert n k m
     p <- polarityOf m' n t
     KArr p k <$> kindOf m' t
 kindOf m (TArr t1 t2) = do
     k1 <- kindOf m t1
-    unless (k1 `aeq` KType) $ error "kindOf: ill-kinded left argument of type arrow"
+    unless (k1 `aeq` KType) $ throwError "kindOf: ill-kinded left argument of type arrow"
     k2 <- kindOf m t2
-    unless (k2 `aeq` KType) $ error "kindOf: ill-kinded right arguemnt of type arrow"
+    unless (k2 `aeq` KType) $ throwError "kindOf: ill-kinded right arguemnt of type arrow"
     return KType
 kindOf m (TApp t1 t2) = do
     k1 <- kindOf m t1
     k2 <- kindOf m t2
     case k1 of
         KArr _ k11 k12 | k11 `aeq` k2 -> return k12
-                       | otherwise -> error ("kindOf: could not unify " ++ show k11 ++ " and " ++ show k2)
-        _ -> error "kindOf: attempt to apply to non-arrow kind"
+                       | otherwise -> throwError ("kindOf: could not unify " ++ ppshow k11 ++ " and " ++ ppshow k2)
+        _ -> throwError ("kindOf: attempt to apply to non-arrow kind " ++ ppshow t1 ++ " : " ++ ppshow k1)
 kindOf m (TMu t) = do
     k <- kindOf m t
     case k of
-        KArr Positive k1 k2 | k1 `aeq` k2 -> return k1 -- perhaps we shouldn't be polymorphic
-                            | otherwise -> error "kindOf: cannot take fixpoint of non-endomorphic operator"
-        KArr _ _ _ -> error "kindOf: cannot take fixpoint of non-positive operator"
-        _ -> error "kindOf: cannot take fixpoint of *"
+        KArr Positive k1 k2 | k1 `aeq` k2 -> return k1
+                            | otherwise -> throwError "kindOf: cannot take fixpoint of non-endomorphic operator"
+        KArr _ _ _ -> throwError "kindOf: cannot take fixpoint of non-positive operator"
+        _ -> throwError ("kindOf: cannot take fixpoint of " ++ ppshow k)
 kindOf m (TForall t) = do
     k <- kindOf m t
     case k of
         KArr _ _ k2 -> return k2
-        _ -> error "kindOf: cannot universally quantify over *"
+        _ -> throwError ("kindOf: cannot universally quantify over " ++ ppshow k)
 
-kof = runFreshM . kindOf Map.empty
-tof = runFreshM . typeOf Map.empty Map.empty
+-- what this ordering I don't
+kof = runLFreshM . runErrorT . kindOf Map.empty
+tof = runLFreshM . runErrorT . typeOf Map.empty Map.empty
 
 typeOf :: Map (Name Type) Kind -> Map (Name Expr) Type -> Expr -> M Type
 typeOf km m e = do
@@ -204,14 +207,14 @@ typeOf km m e = do
     normalize t
 
 typeOf' :: Map (Name Type) Kind -> Map (Name Expr) Type -> Expr -> M Type
-typeOf' _ m (Var n) = maybe (error "typeOf: unbound variable") return (Map.lookup n m)
+typeOf' _ m (Var n) = maybe (throwError ("typeOf: unbound variable " ++ show n)) return (Map.lookup n m)
 typeOf' km m (Lambda t b) = do
     k <- kindOf km t
-    unless (k `aeq` KType) $ error "typeOf: lambda type annotation is not *"
-    (n, e) <- unbind b
+    unless (k `aeq` KType) $ throwError "typeOf: lambda type annotation is not *"
+    lunbind b $ \(n, e) -> do
     TArr t <$> typeOf km (Map.insert n t m) e
 typeOf' km m (TyLambda k b) = do
-    (n, e) <- unbind b
+    lunbind b $ \(n, e) -> do
     t <- typeOf (Map.insert n k km) m e
     return (TForall (TLambda k (bind n t))) -- note the forall!
 typeOf' km m (App e1 e2) = do
@@ -219,31 +222,30 @@ typeOf' km m (App e1 e2) = do
     t2 <- typeOf km m e2
     case t1 of
         TArr t11 t12 | t11 `aeq` t2 -> return t12
-                     | otherwise -> error ("typeOf: could not unify " ++ show t1 ++ " and " ++ show t2)
-        _ -> error "typeOf: attempt to apply to non-function type"
+                     | otherwise -> throwError ("typeOf: could not apply (" ++ ppshow e1 ++ " : " ++ ppshow t1 ++ ") and (" ++ ppshow e2 ++ " : " ++ ppshow t2 ++ ")")
+        _ -> throwError "typeOf: attempt to apply to non-function type"
 typeOf' km m (TyApp e t) = do
     nt <- typeOf km m e
     k' <- kindOf km t
     case nt of
         TForall (TLambda k b)
             | k `aeq` k' -> do
-                (n, t') <- unbind b
-                return (subst n t t')
-            | otherwise -> error ("typeOf: could not unify kinds " ++ show k ++ " and " ++ show k')
-        _ -> error "typeOf: cannot apply to non-universal quantifier"
+                lunbind b $ \(n, t') -> return (subst n t t')
+            | otherwise -> throwError ("typeOf: could not unify kinds " ++ ppshow k ++ " and " ++ ppshow k')
+        _ -> throwError "typeOf: cannot apply to non-universal quantifier"
 typeOf' km m (Fold e1 e2) = do
     ta <- typeOf km m e1
     tb <- typeOf km m e2
     case (ta, tb) of
         (TArr t1 t1', TMu t2) -> do
             t2' <- normalize (TApp t2 t1')
-            unless (t1 `aeq` t2') $ error ("typeOf: could not unify " ++ show t1 ++ " and " ++ show t2 ++ " applied to " ++ show t1')
+            unless (t1 `aeq` t2') $ throwError ("typeOf: could not unify " ++ ppshow t1 ++ " and " ++ ppshow t2 ++ " applied to " ++ ppshow t1')
             return t1'
-        _ -> error "typeOf: folder must be a function"
+        _ -> throwError "typeOf: folder must be a function"
 typeOf' km m (Roll t e) = do
     ta <- typeOf km m e
     ta' <- normalize (TApp t (TMu t))
-    unless (ta `aeq` ta') $ error "typeOf: cannot unify for roll"
+    unless (ta `aeq` ta') $ throwError "typeOf: cannot unify for roll"
     return (TMu t)
 
 -- PRETTY PRINTING
@@ -251,7 +253,8 @@ typeOf' km m (Roll t e) = do
 class Pretty p where
     ppr :: (Applicative m, LFresh m) => Int -> p -> m Doc
 
-pprint = runLFreshM . ppr 0
+pprint = putStrLn . ppshow
+ppshow = PP.render . runLFreshM . ppr 0
 
 instance Pretty Polarity where
     ppr _ Positive = return $ PP.text "⁺"
@@ -280,11 +283,15 @@ instance Pretty Expr where
     ppr p (Fold e1 e2) = ppr p (App (App (var "fold") e1) e2)
     ppr p (Roll t e) = ppr p (App (TyApp (var "roll") t) e)
 
-parr' a b c = a <+> PP.text "→" <> b <+> c
-parr a b = a <+> PP.text "→" <+> b
+instance Pretty a => Pretty (Either String a) where
+    ppr _ (Left err) = return (PP.text ("ERROR " ++ err))
+    ppr _ (Right a) = ppr 0 a
+
+parr' a b c = PP.hang a (-2) (PP.text "→" <> b <+> c)
+parr a b = PP.hang a (-2) (PP.text "→" <+> b)
 prettyParen True = PP.parens
 prettyParen False = id
-pbind b n k e = PP.text b <> PP.parens (PP.text (show n) <+> PP.colon <+> k) <> PP.text "." <+> e
+pbind b n k e = PP.hang (PP.text b <> PP.parens (PP.text (show n) <+> PP.colon <+> k) <> PP.text ".") 2 e
 pbinds p c k b = fmap (prettyParen (p > 0)) . lunbind b $ \(n,t) ->
     pbind c n <$> ppr 0 k <*> ppr 0 t
 pbinder p c (TLambda k b) = pbinds p c k b
@@ -297,11 +304,13 @@ infixl 9 #, &
 infixr 1 ~>
 
 (&) = TyApp
-lam t x e = Lambda t $ bind (string2Name x) e
-tlam k x e = TyLambda k $ bind (string2Name x) e
-tylam k x t = TLambda k $ bind (string2Name x) t
+lam x t e = Lambda t $ bind (string2Name x) e
+tlam x k e = TyLambda k $ bind (string2Name x) e
+tylam x k t = TLambda k $ bind (string2Name x) t
 var = Var . string2Name
 tvar = TVar . string2Name
+forall k x e = TForall (tylam k x e)
+phi f1 f2 = forall "a" KType (f1 # "a" ~> f2 # "a")
 
 class SynApp a where (#) :: a -> a -> a
 instance SynApp Expr where (#) = App
@@ -316,19 +325,41 @@ instance IsString Type where fromString = tvar
 
 -- EXAMPLES
 
-exIdentity = tlam KType "a"
-           . lam "a" "x"
+exIdentity = tlam "a" KType
+           . lam "x" "a"
            $ var "x"
 
-exFold = tlam KType "r"
-       . tlam (KType ~> KType) "f"
-       . lam ("f" # "r" ~> "r") "f"
-       . lam (TMu "f") "xs"
+exFold = tlam "r" KType
+       . tlam "f" (KType ~> KType)
+       . lam "f" ("f" # "r" ~> "r")
+       . lam "xs" (TMu "f")
        $ Fold "f" "xs"
 
-exRoll = tlam (KType ~> KType) "natf"
-       . lam (TMu "natf") "n"
-       . lam (TForall (tylam KType "n" ("n" ~> "natf" # "n"))) "succ"
+exRoll = tlam "natf" (KType ~> KType)
+       . lam "n" (TMu "natf")
+       . lam "succ" (forall "n" KType ("n" ~> "natf" # "n"))
        $ Roll "natf" ("succ" & TMu "natf" # "n")
 
+exBlog = tlam "D_i" (KType ~> KType)
+       . tlam "D_j" (KType ~> KType)
+       . tlam "prod" (KType ~> KType ~> KType)
+       . tlam "Ix_i" KType
+       . tlam "Ix_j" KType
+       . tlam "Int" KType
+       . tlam "ListF" ((KType ~> KType) ~> KType ~> KType)
+       . lam "fmap" (forall "f" (KType ~> KType) (forall "a" KType (forall "b" KType (("a" ~> "b") ~> ("f" # "a" ~> "f" # "b")))))
+       -- . lam "di2list" ("D_i" `phi` TMu "ListF")
+       -- . lam "dj2list" ("D_j" `phi` TMu "ListF")
+       -- . lam "tabulate_di" ((tylam KType "a" ("Ix_i" ~> "a")) `phi` "D_i")
+       -- . lam "index_di" ("D_i" `phi` (tylam "a" KType ("Ix_i" ~> "a")))
+       . lam "tabulate_dj" ((tylam "a" KType ("Ix_j" ~> "a")) `phi` "D_j")
+       -- . lam "index_dj" ("D_j" `phi` (tylam "a" KType ("Ix_j" ~> "a")))
+       . lam "bucket" ("D_i" # "Ix_j" ~> "D_i" `phi` (tylam "a" KType ("D_j" # (TMu "ListF" # "a"))))
+       . lam "divide" ("prod" # "Int" # "Int" ~> "Int")
+       . lam "plusinc" ("ListF" # (tylam "a" KType $ "prod" # "a" # "a") # "Int" ~> "prod" # "Int" # "Int")
+       . lam "pi" ("Ix_j" ~> "D_j" `phi` (tylam "a" KType "a"))
+       . lam "zero" "Int"
+       . lam "x" ("D_i" # "Int")
+       . lam "c" ("D_i" # "Ix_j")
+       $ "tabulate_dj" & "Int" # lam "j" "Ix_j" ("divide" # Fold "plusinc" ("pi" # "j" & {- some of the wheels have fallen off -} (TMu "ListF" # "Int") # (("bucket" # "c" & "Int") # "x")))
 
