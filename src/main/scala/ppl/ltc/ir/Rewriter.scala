@@ -1,5 +1,6 @@
 package ppl.ltc.ir
 
+/*
 // peephole rewriter
 
 // ezyang: this rewriter doesn't have type information
@@ -93,3 +94,5 @@ object RRComposeAssocRight extends RewriteRule {
     case _ => x
   }
 }
+*/
+

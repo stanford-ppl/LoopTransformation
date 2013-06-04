@@ -1,5 +1,6 @@
 package ppl.ltc.ir
 
+/*
 import scala.language.implicitConversions
 
 object ScalaEmbedding {
@@ -36,4 +37,4 @@ object ScalaEmbedding {
   val z = new SCESym("z")
 
 }
-
+*/

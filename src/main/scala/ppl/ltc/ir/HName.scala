@@ -1,6 +1,6 @@
 package ppl.ltc.ir
 
-
+/*
 sealed trait HName {
   override def toString: String = this match {
     case HNameS(n) => n
@@ -16,4 +16,4 @@ case class HNameSI(name: String, index: Int) extends HName {
   if(name contains "_") throw new IRValidationException()
 }
 case class HNameI(index: Int) extends HName
-
+*/

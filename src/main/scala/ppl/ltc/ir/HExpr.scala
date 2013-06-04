@@ -2,6 +2,7 @@ package ppl.ltc.ir
 
 import scala.collection._
 
+/*
 sealed trait HExpr {
   override def toString: String = PrettyPrint.pprint(this)
   def htype: HType = {
@@ -69,4 +70,4 @@ case class EZip(f: HFunctorRepresentable) extends EPrimitive {
     f(a) --> (f(b) --> f(DProduct(a, b)))
   }
 }
-
+*/

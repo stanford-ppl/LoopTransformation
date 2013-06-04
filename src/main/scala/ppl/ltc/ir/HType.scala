@@ -2,6 +2,25 @@ package ppl.ltc.ir
 
 import scala.collection._
 
+
+sealed trait HType {
+  override def toString: String = PrettyPrint.pprint(this)
+  def -->(c: HType): HType = TArr(this, c)
+}
+object --> {
+  def unapply(t: HType): Option[Tuple2[HType, HType]] = t match {
+    case TArr(lhs, rhs) => Some((lhs, rhs))
+    case _ => None
+  }
+}
+
+case class TVar(idx: Int) extends HType { if(idx <= 0) throw new IRValidationException() }
+case class TArr(lhs: HType, rhs: HType) extends HType
+case class TLambda(dom: HKind, body: HType) extends HType
+case class TApp(fx: HType, arg: HType) extends HType
+
+
+/*
 sealed trait HType {
   override def toString: String = this match {
     case TParam(i) => ('α' + i).toChar.toString
@@ -59,3 +78,4 @@ case class DDiagonal(size: Int) extends HTypeFunction {
 object DInt extends HTypeFunction { val arity = 0 }
 object DBool extends HTypeFunction { val arity = 0 }
 object DDouble extends HTypeFunction { val arity = 0 }
+*/

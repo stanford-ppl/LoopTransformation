@@ -26,6 +26,12 @@ sealed trait Polarity {
     case (Positive, Negative) => Negative
     case (Negative, Negative) => Negative
   }
+  override def toString = this match {
+    case Unspecified => "±"
+    case Positive => "⁺"
+    case Negative => "⁻"
+    case Constant => "°"
+  }
 }
 
 object Unspecified extends Polarity

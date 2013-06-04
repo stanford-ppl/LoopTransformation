@@ -1,6 +1,6 @@
 package ppl.ltc.ir
 
-
+/*
 object Functions {
   val compose: HExpr = {
     val f = HNameS("f")
@@ -22,3 +22,4 @@ object ∘ {
     case _ => None
   }
 }
+*/

@@ -2,6 +2,7 @@ package ppl.ltc.ir
 
 import scala.collection._
 
+/*
 class TypeInferenceException(msg: String) extends Exception(msg)
 
 object TypeInference {
@@ -75,3 +76,5 @@ class TypeInference {
     acc
   }
 }
+*/
+
