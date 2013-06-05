@@ -26,16 +26,16 @@ import Debug.Trace
 
 -- DATA TYPES
 
-data Polarity = Unspecified | Positive | Negative | Fixed
+data Polarity = Unspecified | Positive | Negative | Constant
     deriving (Show, Eq)
 
-data Constant = Star
-              | StarStar
-              | Box
-              | BoxBox
+data Sort = Star
+          | StarStar
+          | Box
+          | BoxBox
     deriving (Show, Ord, Eq)
 
-data Expr = Constant Constant
+data Expr = Sort Sort
           | Var (Name Expr)
           | App Expr Expr
           | Lambda Expr (Bind (Name Expr) Expr)
@@ -51,13 +51,13 @@ data UExpr = UVar (Name UExpr)
 
 -- UNBOUND NONSENSE
 
-$(derive [''Expr, ''Constant, ''Polarity])
+$(derive [''Expr, ''Sort, ''Polarity])
 $(derive [''UExpr])
 instance Alpha Expr
-instance Alpha Constant
+instance Alpha Sort
 instance Alpha UExpr
 instance Alpha Polarity
-instance Subst Expr Constant where
+instance Subst Expr Sort where
 instance Subst Expr Polarity where
 instance Subst Expr Expr where
     isvar (Var v) = Just (SubstName v)
@@ -74,15 +74,15 @@ lub Positive Negative = Unspecified
 lub Positive _ = Positive
 lub Negative Positive = Unspecified
 lub Negative _ = Negative
-lub Fixed p = p
+lub Constant p = p
 
 instance Num Polarity where
     negate Positive = Negative
     negate Negative = Positive
     negate p = p
 
-    Fixed * _ = Fixed
-    _ * Fixed = Fixed
+    Constant * _ = Constant
+    _ * Constant = Constant
     Unspecified * _ = Unspecified
     _ * Unspecified = Unspecified
     Positive * Positive = Positive
@@ -109,7 +109,7 @@ runM = either error id . runLFreshM . runErrorT
 -- XXX I hope this is right
 beta :: Expr -> MaybeT M Expr
 beta (Var _) = done
-beta (Constant _) = done
+beta (Sort _) = done
 beta (Pi p t z) = lunbind z $ \(x, e) ->
         Pi p <$> beta t <*> pure (bind x e)
     <|> Pi p <$> pure t <*> fmap (bind x) (beta e)
@@ -129,7 +129,7 @@ normalize t = do
         Just t' -> normalize t'
         Nothing -> return t
 
-axiom :: Constant -> M Constant
+axiom :: Sort -> M Sort
 axiom Star = return Box
 axiom StarStar = return BoxBox
 axiom Box = throwError "axiom: ☐ is not typeable"
@@ -148,9 +148,9 @@ relations = Map.fromList
     ]
 
 polarityOf :: Map (Name Expr) Expr -> Name Expr -> Expr -> M Polarity
-polarityOf _ _ (Constant _) = return Fixed
+polarityOf _ _ (Sort _) = return Constant
 polarityOf _ n (Var x) | n == x    = return Positive
-                       | otherwise = return Fixed
+                       | otherwise = return Constant
 polarityOf m n (App t1 t2) = do
     k <- typeOf m t1
     p1 <- polarityOf m n t1
@@ -168,7 +168,7 @@ polarityOf m n (Pi _ t1 z) = lunbind z $ \(x, t2) -> do
     return (lub (-p1) p2)
 
 typeOf :: Map (Name Expr) Expr -> Expr -> M Expr
-typeOf _ (Constant c) = Constant <$> axiom c
+typeOf _ (Sort c) = Sort <$> axiom c
 typeOf m (Var n) = maybe (throwError ("typeOf: unbound variable " ++ show n)) return (Map.lookup n m)
 typeOf m e@(App f a) = do
     tf <- typeOf m f
@@ -183,7 +183,7 @@ typeOf m (Lambda ta z) = lunbind z $ \(x, b) -> do
     tb <- typeOf m' b
     t2 <- typeOf m' tb
     case (t1, t2) of
-        (Constant s1, Constant s2) -> case Map.lookup (s1, s2) relations of
+        (Sort s1, Sort s2) -> case Map.lookup (s1, s2) relations of
             Nothing -> throwError "typeOf: lambda relation violation"
             Just _ -> do
                 p <- polarityOf m' x b
@@ -194,9 +194,9 @@ typeOf m (Pi _ ta z) = lunbind z $ \(x, tb) -> do
     t1 <- typeOf m ta
     t2 <- typeOf (Map.insert x ta m) tb
     case (t1, t2) of
-        (Constant s1, Constant s2) -> case Map.lookup (s1, s2) relations of
+        (Sort s1, Sort s2) -> case Map.lookup (s1, s2) relations of
             Nothing -> throwError "typeOf: pi relation violation"
-            Just s3 -> return (Constant s3)
+            Just s3 -> return (Sort s3)
         _ -> throwError "typeOf: pi not sorts"
 
 tof = runM . typeOf library
@@ -213,26 +213,26 @@ erase m e@(Var n) = do
             k <- typeOf m t
             let r = return (UVar (translate n))
             case k of
-                Constant Star -> r
-                Constant StarStar -> r
+                Sort Star -> r
+                Sort StarStar -> r
                 _ -> throwError ("erase: non-computational variable " ++ ppshow e ++ " was not erased")
 erase m (Lambda t z) = lunbind z $ \(n, e) -> do
     -- need to decide if it has computational content
     k <- typeOf m t
     case k of
-        Constant Star -> ULambda . bind (translate n) <$> erase (Map.insert n t m) e
-        Constant StarStar -> throwError "erase: lambda takes polytype as argument"
+        Sort Star -> ULambda . bind (translate n) <$> erase (Map.insert n t m) e
+        Sort StarStar -> throwError "erase: lambda takes polytype as argument"
         _ -> erase (Map.insert n t m) e
-erase m e@(App e1 e2) = do
+erase m (App e1 e2) = do
     t <- typeOf m e2
     k <- typeOf m t
     let r = UApp <$> erase m e1 <*> erase m e2
     case k of
-        Constant Star -> r
-        Constant StarStar -> r
+        Sort Star -> r
+        Sort StarStar -> r
         _ -> erase m e1
 erase _ (Pi _ _ _) = throwError "erase: pi has no computational content"
-erase _ (Constant _) = throwError "erase: constant has no computational content"
+erase _ (Sort _) = throwError "erase: constant has no computational content"
 
 -- PRETTY PRINTING
 
@@ -242,7 +242,7 @@ class Pretty p where
 pprint = putStrLn . ppshow
 ppshow = PP.render . runLFreshM . ppr 0
 
-instance Pretty Constant where
+instance Pretty Sort where
     ppr _ Box = return (PP.text "☐")
     ppr _ BoxBox = return (PP.text "☐☐")
     ppr _ Star = return (PP.text "★")
@@ -255,14 +255,14 @@ instance Pretty Polarity where
 pprNop _ = return $ PP.text ""
 pprPolarity Positive = return $ PP.text "⁺"
 pprPolarity Negative = return $ PP.text "⁻"
-pprPolarity Fixed = return $ PP.text "°"
+pprPolarity Constant = return $ PP.text "°"
 pprPolarity Unspecified = return $ PP.text "±"
 
 nopEq x y = if x == y then return (PP.text "") else ppr 0 y
 
 instance Pretty Expr where
     ppr _ (Var n) = return (PP.text (show n))
-    ppr _ (Constant c) = ppr 0 c
+    ppr _ (Sort c) = ppr 0 c
     ppr p (Lambda t z) = pbinds p "λ" t z
     -- not perfect: want to look at the sorts to get a better idea for
     -- how to print it...
@@ -294,7 +294,7 @@ lam x t e = Lambda t $ bind (string2Name x) e
 forall x t e = Pi Positive t $ bind (string2Name x) e
 (#) = App
 a ~> b = Pi Positive a $ bind (s2n "_") b
-star = Constant Star
+star = Sort Star
 phi f1 f2 = forall "a" star (f1 # "a" ~> f2 # "a")
 
 instance IsString Expr where fromString = Var . fromString
