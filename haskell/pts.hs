@@ -23,6 +23,8 @@ import qualified Text.PrettyPrint as PP
 import Text.PrettyPrint (Doc, (<+>), (<>))
 import Data.String
 
+-- DATA TYPES
+
 data Polarity = Unspecified | Positive | Negative | Fixed
     deriving (Show, Eq)
 
@@ -39,11 +41,14 @@ data Expr = Constant Constant
           | Pi Polarity Expr (Bind (Name Expr) Expr)
     deriving (Show)
 
--- notice that Pi has no computational content!
+-- FRONTEND LANGUAGE
+
 data UExpr = UVar (Name UExpr)
            | UApp UExpr UExpr
            | ULambda (Bind (Name UExpr) UExpr)
     deriving (Show)
+
+-- UNBOUND NONSENSE
 
 $(derive [''Expr, ''Constant, ''Polarity])
 $(derive [''UExpr])
@@ -59,6 +64,8 @@ instance Subst Expr Expr where
 instance Subst UExpr UExpr where
     isvar (UVar v) = Just (SubstName v)
     isvar _ = Nothing
+
+-- POLARITY IS A LATTICE
 
 lub Unspecified _ = Unspecified
 lub _ Unspecified = Unspecified
@@ -87,10 +94,16 @@ instance Num Polarity where
     abs = error "abs not defined on polarity"
     signum = error "signum not defined on polarity"
 
+-- MONAD PLUMBING
+
 done :: MonadPlus m => m a
 done = mzero
 
 type M = ErrorT String LFreshM
+
+runM = either error id . runLFreshM . runErrorT
+
+-- EVALUATION AND TYPE CHECKING
 
 -- XXX I hope this is right
 beta :: Expr -> MaybeT M Expr
@@ -185,14 +198,15 @@ typeOf m (Pi _ ta z) = lunbind z $ \(x, tb) -> do
             Just s3 -> return (Constant s3)
         _ -> throwError "typeOf: pi not sorts"
 
-runM = either error id . runLFreshM . runErrorT
 tof = runM . typeOf library
+
+-- PRETTY PRINTING
+
+class Pretty p where
+    ppr :: (Applicative m, LFresh m) => Int -> p -> m Doc
 
 pprint = putStrLn . ppshow
 ppshow = PP.render . runLFreshM . ppr 0
-
-instance IsString Expr where fromString = Var . fromString
-instance IsString (Name Expr) where fromString = string2Name
 
 instance Pretty Constant where
     ppr _ Box = return (PP.text "☐")
@@ -216,14 +230,13 @@ instance Pretty Expr where
     ppr _ (Var n) = return (PP.text (show n))
     ppr _ (Constant c) = ppr 0 c
     ppr p (Lambda t z) = pbinds p "λ" t z
+    -- not perfect: want to look at the sorts to get a better idea for
+    -- how to print it...
     ppr p (Pi pm t z) = fmap (prettyParen (p > 0)) . lunbind z $ \(x, e) -> do
         if Set.member x (fv e)
             then pbind "Π" x <$> nopEq Unspecified pm <*> ppr 0 t <*> ppr 0 e
             else parr' <$> ppr 0 t <*> nopEq Positive pm <*> ppr 0 e
     ppr p (App e1 e2) = prettyParen (p > 1) <$> ((<+>) <$> ppr 1 e1 <*> ppr 2 e2)
-
-class Pretty p where
-    ppr :: (Applicative m, LFresh m) => Int -> p -> m Doc
 
 prettyParen True = PP.parens
 prettyParen False = id
@@ -231,6 +244,8 @@ parr' a b c = PP.hang a (-2) (PP.text "→" <> b <+> c)
 pbind b n pm k e = PP.hang (PP.text b <> pm <> PP.parens (PP.text (show n) <+> PP.colon <+> k) <> PP.text ".") 2 e
 pbinds p c k b = fmap (prettyParen (p > 0)) . lunbind b $ \(n,t) ->
     pbind c n (PP.text "") <$> ppr 0 k <*> ppr 0 t
+
+-- EXAMPLE SUPPORT CODE
 
 infixl 9 #
 infixr 1 ~>
@@ -241,6 +256,9 @@ forall x t e = Pi Positive t $ bind (string2Name x) e
 a ~> b = Pi Positive a $ bind (s2n "_") b
 star = Constant Star
 phi f1 f2 = forall "a" star (f1 # "a" ~> f2 # "a")
+
+instance IsString Expr where fromString = Var . fromString
+instance IsString (Name Expr) where fromString = string2Name
 
 (!:) = (,)
 infixr 1 !:
@@ -268,6 +286,8 @@ library = Map.fromList . runM . mapM (\(a,b) -> normalize b >>= \b' -> return (a
     , "bucket"  !: "D_i" # "Ix_j" ~> "D_i" `phi` (lam "a" star ("D_j" # ("μ" # ("ListF" # "a"))))
     , "pi"      !: "Ix_j" ~> "D_j" `phi` (lam "a" star "a")
     ]
+
+-- EXAMPLES
 
 exIdentity = lam "a" star
            . lam "x" "a"
