@@ -22,6 +22,7 @@ import Control.Monad.Error
 import qualified Text.PrettyPrint as PP
 import Text.PrettyPrint (Doc, (<+>), (<>))
 import Data.String
+import Debug.Trace
 
 -- DATA TYPES
 
@@ -200,6 +201,39 @@ typeOf m (Pi _ ta z) = lunbind z $ \(x, tb) -> do
 
 tof = runM . typeOf library
 
+-- TYPE INFERENCE
+
+erz = runM . erase library
+
+erase :: Map (Name Expr) Expr -> Expr -> M UExpr
+erase m e@(Var n) = do
+    case Map.lookup n m of
+        Nothing -> throwError "erase: unbound variable"
+        Just t -> do
+            k <- typeOf m t
+            let r = return (UVar (translate n))
+            case k of
+                Constant Star -> r
+                Constant StarStar -> r
+                _ -> throwError ("erase: non-computational variable " ++ ppshow e ++ " was not erased")
+erase m (Lambda t z) = lunbind z $ \(n, e) -> do
+    -- need to decide if it has computational content
+    k <- typeOf m t
+    case k of
+        Constant Star -> ULambda . bind (translate n) <$> erase (Map.insert n t m) e
+        Constant StarStar -> throwError "erase: lambda takes polytype as argument"
+        _ -> erase (Map.insert n t m) e
+erase m e@(App e1 e2) = do
+    t <- typeOf m e2
+    k <- typeOf m t
+    let r = UApp <$> erase m e1 <*> erase m e2
+    case k of
+        Constant Star -> r
+        Constant StarStar -> r
+        _ -> erase m e1
+erase _ (Pi _ _ _) = throwError "erase: pi has no computational content"
+erase _ (Constant _) = throwError "erase: constant has no computational content"
+
 -- PRETTY PRINTING
 
 class Pretty p where
@@ -238,6 +272,12 @@ instance Pretty Expr where
             else parr' <$> ppr 0 t <*> nopEq Positive pm <*> ppr 0 e
     ppr p (App e1 e2) = prettyParen (p > 1) <$> ((<+>) <$> ppr 1 e1 <*> ppr 2 e2)
 
+instance Pretty UExpr where
+    ppr _ (UVar n) = return (PP.text (show n))
+    ppr p (ULambda z) = fmap (prettyParen (p > 0)) . lunbind z $ \(x,e) -> lam x <$> ppr 0 e
+        where lam x e = PP.hang (PP.text "λ" <> PP.text (show x) <> PP.text ".") 2 e
+    ppr p (UApp e1 e2) = prettyParen (p > 1) <$> ((<+>) <$> ppr 1 e1 <*> ppr 2 e2)
+
 prettyParen True = PP.parens
 prettyParen False = id
 parr' a b c = PP.hang a (-2) (PP.text "→" <> b <+> c)
@@ -263,6 +303,8 @@ instance IsString (Name Expr) where fromString = string2Name
 (!:) = (,)
 infixr 1 !:
 
+-- XXX we are taking it ON FAITH that these signatures are valid in
+-- the system
 library = Map.fromList . runM . mapM (\(a,b) -> normalize b >>= \b' -> return (a, b')) $
     [ "μ"       !: (star ~> star) ~> star
     , "Prod"    !: star ~> star ~> star
