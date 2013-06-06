@@ -38,6 +38,7 @@ data VarInfo = Skolem | Unification
 
 data Expr = Sort Sort
           | Var VarInfo (Name Expr)
+          | Hole
           | App Expr Expr
           | Lambda Expr (Bind (Name Expr) Expr)
           | Pi Expr (Bind (Name Expr) Expr)
@@ -75,6 +76,7 @@ runM = either error id . runLFreshM . runErrorT
 beta :: Expr -> MaybeT M Expr
 beta (Var _ _) = done
 beta (Sort _) = done
+beta Hole = done
 beta (Pi t z) = lunbind z $ \(x, e) ->
         Pi <$> beta t <*> pure (bind x e)
     <|> Pi <$> pure t <*> fmap (bind x) (beta e)
@@ -118,7 +120,7 @@ rel a b c = ((a, b), c)
 relations = Map.fromList
     -- let α t : *, p : **, * : ☐, **, ☐☐
     [ rel Star  Star        Star        -- t -> t : *   (functions on monotypes are monotypes)
-    -- , rel Star  StarStar    StarStar    -- t -> p : *   (quantifiers do not have to be prenex)
+    -- , rel Star  StarStar    StarStar    -- t -> p : *   (DISABLED quantifiers do not have to be prenex)
     , rel Box   Star        StarStar    -- ∀α. t : **   (quantifiers cause polytypes)
     , rel Box   StarStar    StarStar    -- ∀α. p : **   (nested quantifiers are ok)
     , rel Box   Box         Box         -- * -> * : ☐   (type functions on monotypes are monotypes)
@@ -129,6 +131,7 @@ typeOf :: Context -> Expr -> M Type
 typeOf _ (Sort c) = Sort <$> axiom c
 typeOf m (Var Skolem n) = maybe (throwError ("typeOf: unbound variable " ++ show n)) return (Map.lookup n m)
 typeOf _ (Var Unification _) = throwError "typeOf: illegal unification variable"
+typeOf _ Hole = throwError "typeOf: illegal hole"
 typeOf m e@(App f a) = do
     tf <- typeOf m f
     ta <- typeOf m a
@@ -170,13 +173,13 @@ erase m e@(Var Skolem n) = do
                 Sort StarStar -> return e
                 _ -> throwError ("erase: non-computational variable " ++ ppshow e ++ " was not erased")
 erase _ (Var Unification _) = throwError "error: illegal unification variable"
+erase _ Hole = throwError "error: illegal hole"
 erase m (Lambda t z) = do
-    -- need to decide if it has computational content
     (n, e) <- unbind z
     k <- upGM $ typeOf m t
-    let u = Var Unification (s2n "dummy") -- fake dummy variable!!!
+    -- need to decide if it has computational content
     case k of
-        Sort Star -> Lambda u . bind (translate n) <$> erase (Map.insert n t m) e
+        Sort Star -> Lambda Hole . bind (translate n) <$> erase (Map.insert n t m) e
         Sort StarStar -> throwError "erase: lambda takes polytype as argument"
         _ -> erase (Map.insert n t m) e
 erase m (App e1 e2) = do
@@ -238,6 +241,7 @@ upGM = either throwError return . runLFreshM . runErrorT
 -- it's pretty important that 'unbind' gives us GLOBALLY unique names!
 type2hm :: Context -> Map (Name Type) (Name Type) -> Type -> GM (Expr -> Expr, Type)
 type2hm _ _ e@(Sort _) = return (id, e)
+type2hm _ _ Hole = throwError "type2hm: illegal hole"
 type2hm m u e@(Var Skolem n) | Just n' <- Map.lookup n u = return (id, Var Unification n')
                              | Map.member n m = return (id, e)
                              | otherwise = throwError "type2hm: unbound skolem variable"
@@ -287,11 +291,7 @@ type2hm m u (App t1 t2) = do
 
 -- Converts an untyped lambda calculus term into a typed one, while
 -- simultaneously generating a list of constraints over unification
--- variables.  Actually, this works for types too!
---
--- XXX: WHAT ABOUT APPLICATIONS?  Idea from Rank 1 polymorphism paper:
--- DELAY it (carrying around the information) until some other
--- type rule forces the shape to be some form
+-- variables.  (This works for types too!)
 constraintsOf :: Context -> Expr -> GM ((Expr, Type), [(Type, Type)])
 constraintsOf ctx = runWriterT . f Map.empty
   where f m e@(Var Skolem n) = case Map.lookup n m of
@@ -304,17 +304,17 @@ constraintsOf ctx = runWriterT . f Map.empty
                     return (wrap e, t')
                 Nothing -> throwError ("constraintsOf: unbound variable " ++ show n)
         f _ (Var Unification _) = throwError "constraintsOf: illegal unification variable"
+        f _ Hole = throwError "constraintsOf: illegal hole"
         f m (App e1 e2) = do
             (e1', t1) <- f m e1
             (e2', t2) <- f m e2
             t <- Var Unification <$> fresh (s2n "t")
-            x <- fresh (s2n "_")
+            x <- fresh (s2n "x")
             tell [(t1, Pi t2 (bind x t))]
             return (App e1' e2', t)
-        f m (Lambda _ z) = do
+        f m (Lambda pret1 z) = do
+            t1 <- if pret1 `aeq` Hole then Var Unification <$> fresh (s2n "t") else return pret1
             (x, e) <- unbind z
-            -- need to freshen the type; ignore the unification variable!
-            t1 <- Var Unification <$> fresh (s2n "t")
             (e', t2) <- f (Map.insert x t1 m) e
             return (Lambda t1 (bind x e'), Pi t1 (bind x t2))
         -- these only apply when types are under question
@@ -420,6 +420,7 @@ instance Pretty Sort where
 instance Pretty Expr where
     ppr _ (Var Skolem n) = return (PP.text (show n))
     ppr _ (Var Unification n) = return (PP.text "?" <> PP.text (show n))
+    ppr _ Hole = return (PP.text "_")
     ppr _ (Sort c) = ppr 0 c
     ppr p (Lambda t z) = pbinds p "λ" t z
     -- not perfect: want to look at the sorts to get a better idea for
@@ -445,7 +446,7 @@ infixr 1 ~>
 lam x t e = Lambda t $ bind (string2Name x) e
 forall x t e = Pi t $ bind (string2Name x) e
 (#) = App
-a ~> b = Pi a $ bind (s2n "_") b
+a ~> b = Pi a $ bind (s2n "_") b -- hope it doesn't conflict!
 star = Sort Star
 phi f1 f2 = forall "a" star (f1 # "a" ~> f2 # "a")
 
