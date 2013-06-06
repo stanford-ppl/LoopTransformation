@@ -44,12 +44,18 @@ data Expr = Sort Sort
           | Pi Expr (Bind (Name Expr) Expr)
     deriving (Show)
 
+-- It's all the same, but it can make some type signatures clearer
+type Type = Expr
+type Kind = Expr
+
 -- FRONTEND LANGUAGE
 
 data UExpr = UVar (Name UExpr)
            | UApp UExpr UExpr
            | ULambda (Bind (Name UExpr) UExpr)
     deriving (Show)
+
+type Context = Map (Name Expr) Type
 
 -- UNBOUND NONSENSE
 
@@ -120,7 +126,7 @@ relations = Map.fromList
     , rel Box   BoxBox      BoxBox      -- * -> ** : ☐☐ (type functions on polytypes are polytypes)
     ]
 
-typeOf :: Map (Name Expr) Expr -> Expr -> M Expr
+typeOf :: Context -> Expr -> M Type
 typeOf _ (Sort c) = Sort <$> axiom c
 typeOf m (Var Skolem n) = maybe (throwError ("typeOf: unbound variable " ++ show n)) return (Map.lookup n m)
 typeOf _ (Var Unification _) = throwError "typeOf: illegal unification variable"
@@ -154,7 +160,7 @@ tof = runM . typeOf library
 
 -- ERASURE
 
-erase :: Map (Name Expr) Expr -> Expr -> M UExpr
+erase :: Context -> Expr -> M UExpr
 erase m e@(Var Skolem n) = do
     case Map.lookup n m of
         Nothing -> throwError "erase: unbound variable"
@@ -205,12 +211,8 @@ What's going on here?
 
 * In rank-1 polymorphic calculus, this is still not a big deal;
   all such terms can be converted to prenex form, and then the
-  variables introduced freshly as new things to bind to.
-
-* However, we also have a typing context, which means some of the
-  type variables are pre-bound in the environment, and should not
-  be unified away.  Only variables under the quantifiers are fair
-  game; the other variables are skolem variables.
+  variables introduced freshly as new things to bind to.  This is
+  what 'type2hm' is for.
 
 -}
 
@@ -219,18 +221,25 @@ type GM = ErrorT String (FreshM)
 runGM = either error id . runFreshM . runErrorT
 upGM = either throwError return . runLFreshM . runErrorT
 
---  a local context 'm' (lets us do kind-checking)
---  a unification variable map (tells us how to translate bound variables)
---  global context is unnecessary; we can infer if a variable is free if
---  it's not in the unification variable map
---  INVARIANT: all types in global context are beta-normalized!
-interpretAsHMType :: Map (Name Expr) Expr -> Set (Name Expr) -> Expr -> GM Expr
-interpretAsHMType _ _ (Sort _) = throwError ("tap: cannot interpret sort")
-interpretAsHMType m _ e@(Var Skolem n) | Map.member n m = return e
-                                       | otherwise = throwError "tap: unbound skolem variable"
-interpretAsHMType _ u e@(Var Unification n) | Set.member n u = return e
-                                            | otherwise = throwError "tap: unbound unification variable"
-interpretAsHMType m u (Pi ta z) = do
+-- Convert a type from the full calculus to form appropriate for
+-- Hindley-Milner.
+--
+-- We need:
+--  - a local context 'm' (lets us do kind-checking)
+--  - a unification variable set (tells us when a variable is a
+--    unification variable and not a skolem one)
+--  - note: global context is unnecessary; we can infer if a variable is free if
+--    it's not in the unification variable map
+--
+-- INVARIANT: all types in global context are beta-normalized!  Also,
+-- it's pretty important that 'unbind' gives us GLOBALLY unique names!
+type2hm :: Context -> Set (Name Type) -> Type -> GM Type
+type2hm _ _ (Sort _) = throwError ("tap: cannot interpret sort")
+type2hm m u e@(Var Skolem n) | Set.member n u = return (Var Unification n)
+                             | Map.member n m = return e
+                             | otherwise = throwError "tap: unbound skolem variable"
+type2hm _ _ (Var Unification _) = throwError "tap: illegal unification variable"
+type2hm m u (Pi ta z) = do
     (x, tb) <- unbind z
     t1 <- upGM $ typeOf m ta
     let m' = Map.insert x ta m
@@ -238,22 +247,21 @@ interpretAsHMType m u (Pi ta z) = do
     let -- since arrows do not introduce new type variables, u is unmodified;
         -- in fact, lack of dependence states that any further types
         -- should type-check sans the annotation; we thus omit it and
-        -- expect an unbound variable error if there actually was a
-        -- problem
-        starstar = Pi <$> interpretAsHMType m u ta <*> fmap (bind x) (interpretAsHMType m u tb)
-        -- polymorphism! a fresh variable must be added
-        boxstar = do t <- fresh (s2n "t")
-                     interpretAsHMType m' (Set.insert t u) tb
+        -- expect an unbound variable error if there actually was a problem
+        starstar = Pi <$> type2hm m u ta <*> fmap (bind x) (type2hm m u tb)
+        -- polymorphism! add to the unification variable set but
+        -- erase the constructor
+        boxstar = type2hm m' (Set.insert x u) tb
     case (t1, t2) of
         (Sort s1, Sort s2) -> case (s1, s2) of
-            (Star, Star) -> starstar
+            (Star, Star)     -> starstar
             (Star, StarStar) -> starstar
-            (Box, Star) -> boxstar
-            (Box, StarStar) -> boxstar
+            (Box, Star)      -> boxstar
+            (Box, StarStar)  -> boxstar
             _ -> throwError ("tap: not implemented " ++ ppshow s1 ++ ", " ++ ppshow s2)
         _ -> throwError "tap: pi not sorts"
-interpretAsHMType _ _ (Lambda _ _) = throwError "tap: illegal unnormalized lambda present in type"
-interpretAsHMType m u (App t1 t2) = do
+type2hm _ _ (Lambda _ _) = throwError "tap: illegal unnormalized lambda present in type"
+type2hm m u (App t1 t2) = do
     k1 <- upGM $ typeOf m t1
     s1 <- upGM $ typeOf m k1
     case s1 of
@@ -262,29 +270,30 @@ interpretAsHMType m u (App t1 t2) = do
         _ -> throwError "tap: illegal kind"
     -- no attempt made at normalization; assumed already normalized, so
     -- must be an atomic TApp
-    App <$> interpretAsHMType m u t1 <*> interpretAsHMType m u t2
+    App <$> type2hm m u t1 <*> type2hm m u t2
 
-constraintsOf :: Map (Name Expr) Expr -> UExpr -> GM ((Expr, Expr), [(Expr, Expr)])
-constraintsOf ctx = runWriterT . f Map.empty
-    where f :: Map (Name UExpr) Expr -> UExpr -> WriterT [(Expr, Expr)] GM (Expr, Expr)
-          f m (UVar n) = case Map.lookup n m of
+-- Converts an untyped lambda calculus term into a typed one, while
+-- simultaneously generating a list of constraints over unification
+-- variables.
+typeConstraints :: Context -> UExpr -> GM ((Expr, Type), [(Type, Type)])
+typeConstraints ctx = runWriterT . f Map.empty
+  where f m (UVar n) = case Map.lookup n m of
             Just t -> return (Var Skolem (translate n), t)
             Nothing -> case Map.lookup (translate n) ctx of
                 Just t -> do
                     -- notice that 'm' is irrelevant for HM types; this
-                    -- is because we have no dependence on terms in the
-                    -- types!
-                    t' <- lift $ interpretAsHMType ctx Set.empty t
+                    -- is because we have no dependence on terms
+                    t' <- lift $ type2hm ctx Set.empty t
                     return (Var Skolem (translate n), t')
-                Nothing -> throwError ("constraintsOf: unbound variable " ++ show n)
-          f m (UApp e1 e2) = do
+                Nothing -> throwError ("typeConstraints: unbound variable " ++ show n)
+        f m (UApp e1 e2) = do
             (e1', t1) <- f m e1
             (e2', t2) <- f m e2
             t <- Var Unification <$> fresh (s2n "t")
             x <- fresh (s2n "_")
             tell [(t1, Pi t2 (bind x t))]
             return (App e1' e2', t)
-          f m (ULambda z) = do
+        f m (ULambda z) = do
             (x, e) <- unbind z
             t1 <- Var Unification <$> fresh (s2n "t")
             (e', t2) <- f (Map.insert x t1 m) e
@@ -312,16 +321,26 @@ solve eq = f eq []
                 f ((t1,t2):(e1,e2):eq') s
             _ -> throwError "Could not unify"
 
-calculateQuantifiers m uv cover = do
-    let uv' = Set.difference uv cover
-        vs  = Set.intersection uv cover
-        generate [] m f = return (m, f)
-        generate (x:xs) m f = do
+-- Converts unification variables into quantifiers, but with
+-- unification variables as their kinds. Does NOT right factor
+-- quantifiers
+hm2type :: Context -> Expr -> Type -> GM (Expr, Type)
+hm2type m e t =
+    let vs = Set.difference (fv t) (Map.keysSet m)
+        generate [] e t = return (e, t)
+        generate (x:xs) e t = do
             k <- Var Unification <$> fresh (s2n "k")
-            let m' = Map.insert x k m
-            generate xs m' (\r -> Pi k (bind x (f r)))
-    (m', qs) <- generate (Set.elems vs) m id
-    return (m', uv', qs)
+            generate xs (Lambda k (bind x (subst x (Var Skolem x) e)))
+                        (Pi k (bind x (subst x (Var Skolem x) t)))
+    in generate (Set.elems vs) e t
+
+{-
+kindConstraints :: Context -> Type -> GM ((Type, Kind), [(Kind, Kind)])
+kindConstraints ctx = runWriterT . f Map.empty
+  where f _ (Var Unification _) = throwError "kindConstraints: illegal unification variable"
+-}
+
+{-
 
 translateHMType :: Map (Name Expr) Expr -> Set (Name Expr) -> Expr -> WriterT [(Expr, Expr)] GM Expr
 translateHMType _ _ (Sort _) = throwError "translateHMType: bug! sort"
@@ -356,27 +375,18 @@ translateHMType m uv (App t1 t2) = do
     x <- fresh (s2n "_")
     tell [(Pi k2 (bind x ut), k1)]
     return (qs (App e1 e2))
+-}
 
-inferType :: Map (Name Expr) Expr -> UExpr -> GM Expr
+inferType :: Context -> UExpr -> GM (Expr, Type)
 inferType ctx e = do
-    ((_, t), eq) <- constraintsOf ctx e
+    ((e, t), eq) <- typeConstraints ctx e
     subs <- solve eq
     let t' = substs subs t
-    (t'', eq'') <- runWriterT $ translateHMType ctx (Set.difference (fv t') (Map.keysSet ctx)) t'
-    trace (ppshow eq'') $ return ()
-    return t''
+        e' = substs subs e
+    (e'', t'') <- hm2type ctx e' t'
+    return (e'', t'')
 
 infer = runGM . inferType library
-
-{-
-elaborate :: Map (Name Expr) Expr -> UExpr -> GM Expr
-elaborate ctx e = do
-    ((e, _), eq) <- constraintsOf ctx e
-    subs <- solve eq
-    return (substs subs e)
-
-elab = runGM . elaborate library
--}
 
 -- PRETTY PRINTING
 
@@ -396,7 +406,7 @@ instance (Pretty a, Pretty b) => Pretty (a, b) where
     ppr _ (a, b) = do
         pa <- ppr 0 a
         pb <- ppr 0 b
-        return (PP.parens (pa <> PP.comma <+> pb))
+        return (PP.parens (pa <> PP.comma PP.$$ pb))
 
 instance Pretty Sort where
     ppr _ Box = return (PP.text "☐")
