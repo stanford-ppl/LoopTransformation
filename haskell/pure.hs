@@ -28,25 +28,20 @@ import Debug.Trace
 
 -- DATA TYPES
 
-data Polarity = Unspecified | Positive | Negative | Constant
-    deriving (Show, Eq)
-
 data Sort = Star
           | StarStar
           | Box
           | BoxBox
-          | Pole
     deriving (Show, Ord, Eq)
 
 data VarInfo = Skolem | Unification
     deriving (Show)
 
 data Expr = Sort Sort
-          | Polarity Polarity
           | Var VarInfo (Name Expr)
           | App Expr Expr
           | Lambda Expr (Bind (Name Expr) Expr)
-          | Pi {- polarity -} Expr Expr (Bind (Name Expr) Expr)
+          | Pi Expr (Bind (Name Expr) Expr)
     deriving (Show)
 
 -- FRONTEND LANGUAGE
@@ -58,53 +53,20 @@ data UExpr = UVar (Name UExpr)
 
 -- UNBOUND NONSENSE
 
-$(derive [''Expr, ''Sort, ''Polarity, ''VarInfo])
+$(derive [''Expr, ''Sort, ''VarInfo])
 $(derive [''UExpr])
 instance Alpha Expr
 instance Alpha Sort
 instance Alpha UExpr
-instance Alpha Polarity
 instance Alpha VarInfo
 instance Subst Expr Sort where
 instance Subst Expr VarInfo where
-instance Subst Expr Polarity where
 instance Subst Expr Expr where
     isvar (Var _ v) = Just (SubstName v)
     isvar _ = Nothing
 instance Subst UExpr UExpr where
     isvar (UVar v) = Just (SubstName v)
     isvar _ = Nothing
-
--- POLARITY IS A LATTICE
-
-lub Unspecified _ = Unspecified
-lub _ Unspecified = Unspecified
-lub Positive Negative = Unspecified
-lub Positive _ = Positive
-lub Negative Positive = Unspecified
-lub Negative _ = Negative
-lub Constant p = p
-
-polaritySubtypeOf a b = lub a b == b
-
-instance Num Polarity where
-    negate Positive = Negative
-    negate Negative = Positive
-    negate p = p
-
-    Constant * _ = Constant
-    _ * Constant = Constant
-    Unspecified * _ = Unspecified
-    _ * Unspecified = Unspecified
-    Positive * Positive = Positive
-    Positive * Negative = Negative
-    Negative * Negative = Positive
-    Negative * Positive = Negative
-
-    fromInteger = error "fromInteger not defined on polarity"
-    (+) = error "addition not defined on polarity"
-    abs = error "abs not defined on polarity"
-    signum = error "signum not defined on polarity"
 
 -- MONAD PLUMBING
 
@@ -117,15 +79,12 @@ runM = either error id . runLFreshM . runErrorT
 
 -- EVALUATION AND TYPE CHECKING
 
--- XXX I hope this is right
 beta :: Expr -> MaybeT M Expr
 beta (Var _ _) = done
 beta (Sort _) = done
-beta (Polarity _) = done
-beta (Pi p t z) = lunbind z $ \(x, e) ->
-        Pi <$> beta p <*> pure t <*> pure (bind x e)
-    <|> Pi <$> pure p <*> beta t <*> pure (bind x e)
-    <|> Pi <$> pure p <*> pure t <*> fmap (bind x) (beta e)
+beta (Pi t z) = lunbind z $ \(x, e) ->
+        Pi <$> beta t <*> pure (bind x e)
+    <|> Pi <$> pure t <*> fmap (bind x) (beta e)
 beta (Lambda t z) = lunbind z $ \(x, e) -> do
         Lambda <$> beta t <*> pure (bind x e)
     <|> Lambda <$> pure t <*> fmap (bind x) (beta e)
@@ -147,7 +106,6 @@ axiom Star = return Box
 axiom StarStar = return BoxBox
 axiom Box = throwError "axiom: ☐ is not typeable"
 axiom BoxBox = throwError "axiom: ☐☐ is not typeable"
-axiom Pole = throwError "axiom: pole is not typeable"
 
 normalizingSubst n e e' = normalize (subst n e e')
 
@@ -162,53 +120,16 @@ relations = Map.fromList
     , rel Box   BoxBox      BoxBox      -- * -> ** : ☐☐ (type functions on polytypes are polytypes)
     ]
 
-polarityOf :: Map (Name Expr) Expr -> Name Expr -> Expr -> M Polarity
-polarityOf _ _ (Sort _) = return Constant
-polarityOf _ _ (Polarity _) = throwError "polarityOf: illegal polarity"
-polarityOf _ n (Var Skolem x) | n == x    = return Positive
-                              | otherwise = return Constant
-polarityOf _ _ (Var Unification _) = throwError "polarityOf: illegal unification variable"
-polarityOf m n (App t1 t2) = do
-    k <- typeOf m t1
-    p1 <- polarityOf m n t1
-    p2 <- polarityOf m n t2
-    case k of
-        Pi (Polarity p) _ _ -> return (lub p1 (p * p2))
-        Pi _ _ _ -> throwError ("polarityOf: ill-typed pi")
-        _ -> throwError ("polarityOf: attempting to apply non-pi type")
-polarityOf m n (Lambda t z) = lunbind z $ \(x, e) -> do
-    if Set.member n (fv t)
-        then return Unspecified -- conservative choice
-        else polarityOf (Map.insert x t m) n e
-polarityOf m n (Pi _ t1 z) = lunbind z $ \(x, t2) -> do
-    p1 <- polarityOf m n t1
-    p2 <- polarityOf (Map.insert x t1 m) n t2
-    return (lub (-p1) p2)
-
--- implement this with erasure
-{-
-erasePolarity = runWriterT . runM . f
-    where f e@(Sort _) = return e
-          f (Polarity _) = Var Unification <$> lfresh (s2n "t")
-
-subtypeOf :: Expr -> Expr -> Bool
-e1 `subtypeOf` e2 =
-    let (e1', p1) = erasePolarity e1
-        (e2', p2) = erasePolarity e2'
-    in (e1' `aeq` e2') && and (zipWith polaritySubtypeOf p1 p2)
-    -}
-
 typeOf :: Map (Name Expr) Expr -> Expr -> M Expr
 typeOf _ (Sort c) = Sort <$> axiom c
-typeOf _ (Polarity _) = return (Sort Pole)
 typeOf m (Var Skolem n) = maybe (throwError ("typeOf: unbound variable " ++ show n)) return (Map.lookup n m)
 typeOf _ (Var Unification _) = throwError "typeOf: illegal unification variable"
 typeOf m e@(App f a) = do
     tf <- typeOf m f
     ta <- typeOf m a
     case tf of
-        Pi _ ta' z | ta `aeq` ta' -> lunbind z $ \(x, tb) -> normalizingSubst x a tb
-                   | otherwise -> throwError ("typeOf: ill-typed application '" ++ ppshow e ++ "', expected '" ++ ppshow ta' ++ "' but got '" ++ ppshow ta ++ "'")
+        Pi ta' z | ta `aeq` ta' -> lunbind z $ \(x, tb) -> normalizingSubst x a tb
+                 | otherwise -> throwError ("typeOf: ill-typed application '" ++ ppshow e ++ "', expected '" ++ ppshow ta' ++ "' but got '" ++ ppshow ta ++ "'")
         _ -> throwError ("typeOf: attempting to apply non-pi type '" ++ ppshow tf ++ "' in '" ++ ppshow e ++ "'")
 typeOf m (Lambda ta z) = lunbind z $ \(x, b) -> do
     t1 <- typeOf m ta
@@ -218,12 +139,9 @@ typeOf m (Lambda ta z) = lunbind z $ \(x, b) -> do
     case (t1, t2) of
         (Sort s1, Sort s2) -> case Map.lookup (s1, s2) relations of
             Nothing -> throwError "typeOf: lambda relation violation"
-            Just _ -> do
-                p <- polarityOf m' x b
-                return (Pi (Polarity p) ta (bind x tb))
+            Just _ -> return (Pi ta (bind x tb))
         _ -> throwError "typeOf: lambda not sorts"
-typeOf m (Pi _ ta z) = lunbind z $ \(x, tb) -> do
-    -- XXX polarity does not seem to affect the type of pi
+typeOf m (Pi ta z) = lunbind z $ \(x, tb) -> do
     t1 <- typeOf m ta
     t2 <- typeOf (Map.insert x ta m) tb
     case (t1, t2) of
@@ -263,9 +181,8 @@ erase m (App e1 e2) = do
         Sort Star -> r
         Sort StarStar -> r
         _ -> erase m e1
-erase _ (Pi _ _ _) = throwError "erase: pi has no computational content"
+erase _ (Pi _ _) = throwError "erase: pi has no computational content"
 erase _ (Sort _) = throwError "erase: constant has no computational content"
-erase _ (Polarity _) = throwError "erase: polarity has no computational content"
 
 erz = runM . erase library
 
@@ -309,13 +226,11 @@ upGM = either throwError return . runLFreshM . runErrorT
 --  INVARIANT: all types in global context are beta-normalized!
 interpretAsHMType :: Map (Name Expr) Expr -> Set (Name Expr) -> Expr -> GM Expr
 interpretAsHMType _ _ (Sort _) = throwError ("tap: cannot interpret sort")
-interpretAsHMType _ _ (Polarity _) = throwError ("tap: cannot interpret polarity")
 interpretAsHMType m _ e@(Var Skolem n) | Map.member n m = return e
                                        | otherwise = throwError "tap: unbound skolem variable"
 interpretAsHMType _ u e@(Var Unification n) | Set.member n u = return e
                                             | otherwise = throwError "tap: unbound unification variable"
-interpretAsHMType m u (Pi _ ta z) = do
-    -- polarity at type level is meaningless; ignore it
+interpretAsHMType m u (Pi ta z) = do
     (x, tb) <- unbind z
     t1 <- upGM $ typeOf m ta
     let m' = Map.insert x ta m
@@ -325,7 +240,7 @@ interpretAsHMType m u (Pi _ ta z) = do
         -- should type-check sans the annotation; we thus omit it and
         -- expect an unbound variable error if there actually was a
         -- problem
-        starstar = Pi (Polarity Unspecified) <$> interpretAsHMType m u ta <*> fmap (bind x) (interpretAsHMType m u tb)
+        starstar = Pi <$> interpretAsHMType m u ta <*> fmap (bind x) (interpretAsHMType m u tb)
         -- polymorphism! a fresh variable must be added
         boxstar = do t <- fresh (s2n "t")
                      interpretAsHMType m' (Set.insert t u) tb
@@ -367,13 +282,13 @@ constraintsOf ctx = runWriterT . f Map.empty
             (e2', t2) <- f m e2
             t <- Var Unification <$> fresh (s2n "t")
             x <- fresh (s2n "_")
-            tell [(t1, Pi (Polarity Unspecified) t2 (bind x t))]
+            tell [(t1, Pi t2 (bind x t))]
             return (App e1' e2', t)
           f m (ULambda z) = do
             (x, e) <- unbind z
             t1 <- Var Unification <$> fresh (s2n "t")
             (e', t2) <- f (Map.insert x t1 m) e
-            return (Lambda t1 (bind (translate x) e'), Pi (Polarity Unspecified) t1 (bind (translate x) t2))
+            return (Lambda t1 (bind (translate x) e'), Pi t1 (bind (translate x) t2))
 
 rmap f x = fmap (\(a,b) -> (a, f b)) x
 solve eq = f eq []
@@ -388,7 +303,7 @@ solve eq = f eq []
                 let ts = subst k t
                 in f (map (\(a,b) -> (ts a, ts b)) eq')
                      ((k,t):rmap ts s)
-            ((Pi (Polarity p1) u1 z1, Pi (Polarity p2) u2 z2):eq') | p1 == p2 -> do
+            ((Pi u1 z1, Pi u2 z2):eq') -> do
                 Just (_, v1, _, v2) <- unbind2 z1 z2
                 f ((u1,u2):(v1,v2):eq') s
             ((App u1 v1, App u2 v2):eq') -> f ((u1,u2):(v1,v2):eq') s
@@ -397,37 +312,49 @@ solve eq = f eq []
                 f ((t1,t2):(e1,e2):eq') s
             _ -> throwError "Could not unify"
 
-calculateQuantifiers uv cover = do
+calculateQuantifiers m uv cover = do
     let uv' = Set.difference uv cover
         vs  = Set.intersection uv cover
-        generate [] f = return f
-        generate (x:xs) f = do
+        generate [] m f = return (m, f)
+        generate (x:xs) m f = do
             k <- Var Unification <$> fresh (s2n "k")
-            generate xs (\r -> Pi (Polarity Unspecified) k (bind (translate x) (f r)))
-    qs <- generate (Set.elems vs) id
-    return (uv', qs)
+            let m' = Map.insert x k m
+            generate xs m' (\r -> Pi k (bind x (f r)))
+    (m', qs) <- generate (Set.elems vs) m id
+    return (m', uv', qs)
 
-translateHMType :: Set (Name Expr) -> Expr -> WriterT [(Expr, Expr)] GM Expr
-translateHMType _ (Sort _) = throwError "translateHMType: bug! sort"
-translateHMType _ (Polarity _) = throwError "translateHMType: bug! polarity"
-translateHMType _ (Lambda _ _) = throwError "translateHMType: bug! lambda"
-translateHMType _ e@(Var Skolem _) = return e
-translateHMType uv (Var Unification n) = do
-    (uv', qs) <- calculateQuantifiers uv (Set.singleton n)
+translateHMType :: Map (Name Expr) Expr -> Set (Name Expr) -> Expr -> WriterT [(Expr, Expr)] GM Expr
+translateHMType _ _ (Sort _) = throwError "translateHMType: bug! sort"
+translateHMType _ _ (Lambda _ _) = throwError "translateHMType: bug! lambda"
+translateHMType _ _ e@(Var Skolem _) = return e
+translateHMType m uv (Var Unification n) = do
+    (_, uv', qs) <- calculateQuantifiers m uv (Set.singleton n)
     unless (Set.null uv') $ throwError "translateHMType: bug! free variables never showed up!"
     return (qs (Var Skolem (translate n)))
-translateHMType uv (Pi p t1 z) = do
+translateHMType m uv (Pi t1 z) = do
     (x, t2) <- unbind z
-    (uv', qs) <- calculateQuantifiers uv (fv t1)
-    e1 <- translateHMType uv' t1
-    e2 <- translateHMType uv' t2
-    return (qs (Pi p e1 (bind x e2)))
-translateHMType uv (App t1 t2) = do
-    (uv', qs) <- calculateQuantifiers uv (Set.union (fv t1) (fv t2))
-    e1 <- translateHMType uv' t1
-    e2 <- translateHMType uv' t2
+    (m', uv', qs) <- calculateQuantifiers m uv (fv t1)
+    e1 <- translateHMType m' uv' t1
+    e2 <- translateHMType m' uv' t2
+    -- you might think we don't know what these kinds are... but we do!
+    -- Pis at this level are usually function arrows or quantifiers, but we
+    -- eliminated the quantifiers, so these must be function arrows!
+    -- So either it's t -> t : * or t -> p : *; we can resolve the
+    -- ambiguity by just generating free variables, and instantiating
+    -- unconstrained remaining unification variables to *
+    -- trace (ppshow (Map.toList m')) $ return ()
+    -- k1 <- upGM $ typeOf m' e1
+    -- k2 <- upGM $ typeOf m' e2
+    return (qs (Pi e1 (bind x e2)))
+translateHMType m uv (App t1 t2) = do
+    (m', uv', qs) <- calculateQuantifiers m uv (Set.union (fv t1) (fv t2))
+    e1 <- translateHMType m' uv' t1
+    e2 <- translateHMType m' uv' t2
     ut <- Var Unification <$> fresh (s2n "k")
-    -- tell [(ut, Pi Unspecified)]
+    k1 <- upGM $ typeOf m' e1
+    k2 <- upGM $ typeOf m' e2
+    x <- fresh (s2n "_")
+    tell [(Pi k2 (bind x ut), k1)]
     return (qs (App e1 e2))
 
 inferType :: Map (Name Expr) Expr -> UExpr -> GM Expr
@@ -435,7 +362,8 @@ inferType ctx e = do
     ((_, t), eq) <- constraintsOf ctx e
     subs <- solve eq
     let t' = substs subs t
-    (t'', eq'') <- runWriterT $ translateHMType (Set.difference (fv t') (Map.keysSet ctx)) t'
+    (t'', eq'') <- runWriterT $ translateHMType ctx (Set.difference (fv t') (Map.keysSet ctx)) t'
+    trace (ppshow eq'') $ return ()
     return t''
 
 infer = runGM . inferType library
@@ -458,37 +386,35 @@ class Pretty p where
 pprint = putStrLn . ppshow
 ppshow = PP.render . runLFreshM . ppr 0
 
+instance Pretty a => Pretty [a] where
+    ppr _ xs = PP.vcat <$> mapM (ppr 0) xs
+
+instance Pretty (Name a) where
+    ppr _ n = return (PP.text (show n))
+
+instance (Pretty a, Pretty b) => Pretty (a, b) where
+    ppr _ (a, b) = do
+        pa <- ppr 0 a
+        pb <- ppr 0 b
+        return (PP.parens (pa <> PP.comma <+> pb))
+
 instance Pretty Sort where
     ppr _ Box = return (PP.text "☐")
     ppr _ BoxBox = return (PP.text "☐☐")
     ppr _ Star = return (PP.text "★")
     ppr _ StarStar = return (PP.text "★★")
-    ppr _ Pole = return (PP.text "Pole")
-
-instance Pretty Polarity where
-    ppr _ = pprPolarity
-    -- ppr _ = pprNop
-
-pprNop _ = return $ PP.text ""
-pprPolarity Positive = return $ PP.text "⁺"
-pprPolarity Negative = return $ PP.text "⁻"
-pprPolarity Constant = return $ PP.text "°"
-pprPolarity Unspecified = return $ PP.text "±"
-
-nopEq x y = if x `aeq` y then return (PP.text "") else ppr 0 y
 
 instance Pretty Expr where
-    ppr _ (Polarity p) = ppr 0 p
     ppr _ (Var Skolem n) = return (PP.text (show n))
     ppr _ (Var Unification n) = return (PP.text "?" <> PP.text (show n))
     ppr _ (Sort c) = ppr 0 c
     ppr p (Lambda t z) = pbinds p "λ" t z
     -- not perfect: want to look at the sorts to get a better idea for
     -- how to print it...
-    ppr p (Pi pm t z) = fmap (prettyParen (p > 0)) . lunbind z $ \(x, e) -> do
+    ppr p (Pi t z) = fmap (prettyParen (p > 0)) . lunbind z $ \(x, e) -> do
         if Set.member x (fv e)
-            then pbind "Π" x <$> nopEq (Polarity Unspecified) pm <*> ppr 0 t <*> ppr 0 e
-            else parr' <$> ppr 1 t <*> nopEq (Polarity Positive) pm <*> ppr 0 e
+            then pbind "Π" x <$> ppr 0 t <*> ppr 0 e
+            else parr <$> ppr 1 t <*> ppr 0 e
     ppr p (App e1 e2) = prettyParen (p > 1) <$> ((<+>) <$> ppr 1 e1 <*> ppr 2 e2)
 
 instance Pretty UExpr where
@@ -499,10 +425,10 @@ instance Pretty UExpr where
 
 prettyParen True = PP.parens
 prettyParen False = id
-parr' a b c = PP.hang a (-2) (PP.text "→" <> b <+> c)
-pbind b n pm k e = PP.hang (PP.text b <> pm <> PP.parens (PP.text (show n) <+> PP.colon <+> k) <> PP.text ".") 2 e
+parr a c = PP.hang a (-2) (PP.text "→"<+> c)
+pbind b n k e = PP.hang (PP.text b <> PP.parens (PP.text (show n) <+> PP.colon <+> k) <> PP.text ".") 2 e
 pbinds p c k b = fmap (prettyParen (p > 0)) . lunbind b $ \(n,t) ->
-    pbind c n (PP.text "") <$> ppr 0 k <*> ppr 0 t
+    pbind c n <$> ppr 0 k <*> ppr 0 t
 
 -- EXAMPLE SUPPORT CODE
 
@@ -510,9 +436,9 @@ infixl 9 #
 infixr 1 ~>
 
 lam x t e = Lambda t $ bind (string2Name x) e
-forall x t e = Pi (Polarity Positive) t $ bind (string2Name x) e
+forall x t e = Pi t $ bind (string2Name x) e
 (#) = App
-a ~> b = Pi (Polarity Positive) a $ bind (s2n "_") b
+a ~> b = Pi a $ bind (s2n "_") b
 star = Sort Star
 phi f1 f2 = forall "a" star (f1 # "a" ~> f2 # "a")
 
