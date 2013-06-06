@@ -38,10 +38,12 @@ data VarInfo = Skolem | Unification
 
 data Expr = Sort Sort
           | Var VarInfo (Name Expr)
-          | Hole
           | App Expr Expr
           | Lambda Expr (Bind (Name Expr) Expr)
           | Pi Expr (Bind (Name Expr) Expr)
+          -- widgets
+          | Hole
+          | Compose Expr [Expr]
     deriving (Show)
 
 -- It's all the same, but it can make some type signatures clearer
@@ -88,6 +90,9 @@ beta (App (Lambda _ z) e) = lunbind z $ \(x, e') -> do
 beta (App t1 t2) =
         App <$> beta t1 <*> pure t2
     <|> App <$> pure t1 <*> beta t2
+beta (Compose t ts) = do
+        x <- lfresh (s2n "x")
+        return (Lambda t (bind x (foldr App (Var Skolem x) ts)))
 
 normalize :: Expr -> M Expr
 normalize t = do
@@ -157,6 +162,11 @@ typeOf m (Pi ta z) = lunbind z $ \(x, tb) -> do
             Nothing -> throwError "typeOf: pi relation violation"
             Just s3 -> return (Sort s3)
         _ -> throwError "typeOf: pi not sorts"
+typeOf m e@(Compose _ _) = do
+    e' <- runMaybeT (beta e)
+    case e' of
+        Just e'' -> typeOf m e''
+        Nothing -> throwError "typeOf: beta reduction on compose failed"
 
 tof = runM . typeOf library
 
@@ -190,6 +200,7 @@ erase m (App e1 e2) = do
         Sort Star -> r
         Sort StarStar -> r
         _ -> erase m e1
+erase m (Compose _ ts) = Compose Hole <$> mapM (erase m) ts
 erase _ (Pi _ _) = throwError "erase: pi has no computational content"
 erase _ (Sort _) = throwError "erase: constant has no computational content"
 
@@ -276,6 +287,7 @@ type2hm m u e@(Pi ta z) = do
             _ -> throwError ("type2hm: not implemented " ++ ppshow s1 ++ ", " ++ ppshow s2 ++ " for " ++ ppshow e)
         _ -> throwError "type2hm: pi not sorts"
 type2hm _ _ (Lambda _ _) = throwError "type2hm: illegal unnormalized lambda present in type"
+type2hm _ _ (Compose _ _) = throwError "type2hm: illegal unnormalized compose present in type"
 type2hm m u (App t1 t2) = do
     k1 <- upGM $ typeOf m t1
     s1 <- upGM $ typeOf m k1
@@ -317,6 +329,11 @@ constraintsOf ctx = runWriterT . f Map.empty
             (x, e) <- unbind z
             (e', t2) <- f (Map.insert x t1 m) e
             return (Lambda t1 (bind x e'), Pi t1 (bind x t2))
+        f m e@(Compose _ _) = do
+            e' <- upGM . runMaybeT $ beta e
+            case e' of
+                Just e'' -> f m e''
+                Nothing -> throwError "constraintsOf: unable to beta-reduce compose"
         -- these only apply when types are under question
         f _ e@(Sort c) = do
             throwError "constraintsOf: unexpected sort! (we can do it, but what?!)"
@@ -430,6 +447,8 @@ instance Pretty Expr where
             then pbind "Π" x <$> ppr 0 t <*> ppr 0 e
             else parr <$> ppr 1 t <*> ppr 0 e
     ppr p (App e1 e2) = prettyParen (p > 1) <$> ((<+>) <$> ppr 1 e1 <*> ppr 2 e2)
+    -- no good way to render the type...
+    ppr p (Compose _ ts) = prettyParen (p > 0) . PP.hcat . PP.punctuate (PP.text " ∘ ") <$> mapM (ppr 1) ts
 
 prettyParen True = PP.parens
 prettyParen False = id
@@ -511,3 +530,10 @@ exBlog = lam "x" ("D_i" # "Int")
                     ("ListF" # "Int") #
                     "plusinc" #
                     ("pi" # ("μ" # ("ListF" # "Int")) # "j" # (("bucket" # "Int" # "c") # "x"))))
+
+exCompose = lam "a" star
+          . lam "b" star
+          . lam "c" star
+          . lam "f" ("a" ~> "b")
+          . lam "g" ("b" ~> "c")
+          $ Compose "a" ["g", "f"]
