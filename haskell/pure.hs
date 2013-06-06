@@ -1,4 +1,3 @@
-
 {-# LANGUAGE GADTs
            , EmptyDataDecls
            , StandaloneDeriving
@@ -14,7 +13,7 @@
 import Unbound.LocallyNameless
 import Data.Map (Map)
 import qualified Data.Map as Map
-import Data.Set (Set)
+-- import Data.Set (Set)
 import qualified Data.Set as Set
 import Control.Monad.Trans.Maybe
 import Control.Applicative
@@ -48,30 +47,18 @@ data Expr = Sort Sort
 type Type = Expr
 type Kind = Expr
 
--- FRONTEND LANGUAGE
-
-data UExpr = UVar (Name UExpr)
-           | UApp UExpr UExpr
-           | ULambda (Bind (Name UExpr) UExpr)
-    deriving (Show)
-
 type Context = Map (Name Expr) Type
 
 -- UNBOUND NONSENSE
 
 $(derive [''Expr, ''Sort, ''VarInfo])
-$(derive [''UExpr])
 instance Alpha Expr
 instance Alpha Sort
-instance Alpha UExpr
 instance Alpha VarInfo
 instance Subst Expr Sort where
 instance Subst Expr VarInfo where
 instance Subst Expr Expr where
     isvar (Var _ v) = Just (SubstName v)
-    isvar _ = Nothing
-instance Subst UExpr UExpr where
-    isvar (UVar v) = Just (SubstName v)
     isvar _ = Nothing
 
 -- MONAD PLUMBING
@@ -107,7 +94,19 @@ normalize t = do
         Just t' -> normalize t'
         Nothing -> return t
 
-axiom :: Sort -> M Sort
+-- assumes normalized and rank-1
+prenexify :: Context -> Type -> M Type
+prenexify m e = go m e >>= \(f, e') -> return (f e')
+  where go m (Pi ta z) = lunbind z $ \(x, tb) -> do
+            k <- typeOf m ta
+            (f, tb') <- go (Map.insert x ta m) tb
+            case k of
+                Sort Star -> return (f, Pi ta (bind x tb'))
+                Sort Box -> return (Pi ta . bind x . f, tb')
+                _ -> throwError "prenexify: error!"
+        go _ e = return (id, e)
+
+axiom :: MonadError String m => Sort -> m Sort
 axiom Star = return Box
 axiom StarStar = return BoxBox
 axiom Box = throwError "axiom: ☐ is not typeable"
@@ -119,7 +118,7 @@ rel a b c = ((a, b), c)
 relations = Map.fromList
     -- let α t : *, p : **, * : ☐, **, ☐☐
     [ rel Star  Star        Star        -- t -> t : *   (functions on monotypes are monotypes)
-    , rel Star  StarStar    StarStar    -- t -> p : *   (quantifiers do not have to be prenex)
+    -- , rel Star  StarStar    StarStar    -- t -> p : *   (quantifiers do not have to be prenex)
     , rel Box   Star        StarStar    -- ∀α. t : **   (quantifiers cause polytypes)
     , rel Box   StarStar    StarStar    -- ∀α. p : **   (nested quantifiers are ok)
     , rel Box   Box         Box         -- * -> * : ☐   (type functions on monotypes are monotypes)
@@ -160,29 +159,30 @@ tof = runM . typeOf library
 
 -- ERASURE
 
-erase :: Context -> Expr -> M UExpr
+erase :: Context -> Expr -> GM Expr
 erase m e@(Var Skolem n) = do
     case Map.lookup n m of
         Nothing -> throwError "erase: unbound variable"
         Just t -> do
-            k <- typeOf m t
-            let r = return (UVar (translate n))
+            k <- upGM $ typeOf m t
             case k of
-                Sort Star -> r
-                Sort StarStar -> r
+                Sort Star -> return e
+                Sort StarStar -> return e
                 _ -> throwError ("erase: non-computational variable " ++ ppshow e ++ " was not erased")
 erase _ (Var Unification _) = throwError "error: illegal unification variable"
-erase m (Lambda t z) = lunbind z $ \(n, e) -> do
+erase m (Lambda t z) = do
     -- need to decide if it has computational content
-    k <- typeOf m t
+    (n, e) <- unbind z
+    k <- upGM $ typeOf m t
+    let u = Var Unification (s2n "dummy") -- fake dummy variable!!!
     case k of
-        Sort Star -> ULambda . bind (translate n) <$> erase (Map.insert n t m) e
+        Sort Star -> Lambda u . bind (translate n) <$> erase (Map.insert n t m) e
         Sort StarStar -> throwError "erase: lambda takes polytype as argument"
         _ -> erase (Map.insert n t m) e
 erase m (App e1 e2) = do
-    t <- typeOf m e2
-    k <- typeOf m t
-    let r = UApp <$> erase m e1 <*> erase m e2
+    t <- upGM $ typeOf m e2
+    k <- upGM $ typeOf m t
+    let r = App <$> erase m e1 <*> erase m e2
     case k of
         Sort Star -> r
         Sort StarStar -> r
@@ -190,7 +190,7 @@ erase m (App e1 e2) = do
 erase _ (Pi _ _) = throwError "erase: pi has no computational content"
 erase _ (Sort _) = throwError "erase: constant has no computational content"
 
-erz = runM . erase library
+erz = runGM . erase library
 
 -- TYPE INFERENCE
 
@@ -198,7 +198,8 @@ erz = runM . erase library
 
 What's going on here?
 
-* We have an untyped lambda calculus UExpr. Ordinarily, typing this
+* We have an untyped lambda calculus Expr, where all binding annotations
+  are fresh unification variables. Ordinarily, typing this
   calculus would be straightforward. (Vanilla Hindley-Milner, and
   for any unresolved type variables, we just slap quantifiers on the
   front until it's good.  There is the somewhat delicate issue of
@@ -206,7 +207,7 @@ What's going on here?
   instantiation--however, we're not including it in our language.)
 
 * However, we have a global context which contains terms which are
-  typed in the full language.  UExpr may refer to these terms, so
+  typed in the full language.  Untyped Expr may refer to these terms, so
   we need to consider them appropriately.
 
 * In rank-1 polymorphic calculus, this is still not a big deal;
@@ -226,20 +227,22 @@ upGM = either throwError return . runLFreshM . runErrorT
 --
 -- We need:
 --  - a local context 'm' (lets us do kind-checking)
---  - a unification variable set (tells us when a variable is a
---    unification variable and not a skolem one)
+--  - a unification variable map (tells us when a variable is a
+--    unification variable and not a skolem one).  Since each
+--    instance needs to be freshened, this has to be a map
 --  - note: global context is unnecessary; we can infer if a variable is free if
 --    it's not in the unification variable map
 --
 -- INVARIANT: all types in global context are beta-normalized!  Also,
 -- it's pretty important that 'unbind' gives us GLOBALLY unique names!
-type2hm :: Context -> Set (Name Type) -> Type -> GM Type
-type2hm _ _ (Sort _) = throwError ("tap: cannot interpret sort")
-type2hm m u e@(Var Skolem n) | Set.member n u = return (Var Unification n)
+type2hm :: Context -> Map (Name Type) (Name Type) -> Type -> GM Type
+type2hm _ _ e@(Sort _) = return e
+type2hm m u e@(Var Skolem n) | Just n' <- Map.lookup n u = return (Var Unification n')
                              | Map.member n m = return e
-                             | otherwise = throwError "tap: unbound skolem variable"
-type2hm _ _ (Var Unification _) = throwError "tap: illegal unification variable"
-type2hm m u (Pi ta z) = do
+                             | otherwise = throwError "type2hm: unbound skolem variable"
+-- HACK: to deal with kinds...
+type2hm _ _ e@(Var Unification _) = return e
+type2hm m u e@(Pi ta z) = do
     (x, tb) <- unbind z
     t1 <- upGM $ typeOf m ta
     let m' = Map.insert x ta m
@@ -248,60 +251,85 @@ type2hm m u (Pi ta z) = do
         -- in fact, lack of dependence states that any further types
         -- should type-check sans the annotation; we thus omit it and
         -- expect an unbound variable error if there actually was a problem
-        starstar = Pi <$> type2hm m u ta <*> fmap (bind x) (type2hm m u tb)
+        lateral = Pi <$> type2hm m u ta <*> fmap (bind x) (type2hm m u tb)
         -- polymorphism! add to the unification variable set but
         -- erase the constructor
-        boxstar = type2hm m' (Set.insert x u) tb
+        promote = do
+            t <- fresh (s2n "t")
+            type2hm m' (Map.insert x t u) tb
     case (t1, t2) of
         (Sort s1, Sort s2) -> case (s1, s2) of
-            (Star, Star)     -> starstar
-            (Star, StarStar) -> starstar
-            (Box, Star)      -> boxstar
-            (Box, StarStar)  -> boxstar
-            _ -> throwError ("tap: not implemented " ++ ppshow s1 ++ ", " ++ ppshow s2)
-        _ -> throwError "tap: pi not sorts"
-type2hm _ _ (Lambda _ _) = throwError "tap: illegal unnormalized lambda present in type"
+            (Star, Star)     -> lateral
+            (Star, StarStar) -> lateral
+            (Box, Star)      -> promote
+            (Box, StarStar)  -> promote
+            (Box, Box)       -> lateral
+            _ -> throwError ("type2hm: not implemented " ++ ppshow s1 ++ ", " ++ ppshow s2 ++ " for " ++ ppshow e)
+        _ -> throwError "type2hm: pi not sorts"
+type2hm _ _ (Lambda _ _) = throwError "type2hm: illegal unnormalized lambda present in type"
 type2hm m u (App t1 t2) = do
     k1 <- upGM $ typeOf m t1
     s1 <- upGM $ typeOf m k1
     case s1 of
         Sort Box -> return ()
         Sort BoxBox -> return ()
-        _ -> throwError "tap: illegal kind"
+        _ -> throwError "type2hm: illegal kind"
     -- no attempt made at normalization; assumed already normalized, so
-    -- must be an atomic TApp
+    -- must be an atomic App
     App <$> type2hm m u t1 <*> type2hm m u t2
 
 -- Converts an untyped lambda calculus term into a typed one, while
 -- simultaneously generating a list of constraints over unification
--- variables.
-typeConstraints :: Context -> UExpr -> GM ((Expr, Type), [(Type, Type)])
-typeConstraints ctx = runWriterT . f Map.empty
-  where f m (UVar n) = case Map.lookup n m of
-            Just t -> return (Var Skolem (translate n), t)
-            Nothing -> case Map.lookup (translate n) ctx of
+-- variables.  Actually, this works for types too!
+--
+-- XXX: WHAT ABOUT APPLICATIONS?  Idea from Rank 1 polymorphism paper:
+-- DELAY it (carrying around the information) until some other
+-- type rule forces the shape to be some form
+constraintsOf :: Context -> Expr -> GM ((Expr, Type), [(Type, Type)])
+constraintsOf ctx = runWriterT . f Map.empty
+  where f m e@(Var Skolem n) = case Map.lookup n m of
+            Just t -> return (e, t)
+            Nothing -> case Map.lookup n ctx of
                 Just t -> do
                     -- notice that 'm' is irrelevant for HM types; this
                     -- is because we have no dependence on terms
-                    t' <- lift $ type2hm ctx Set.empty t
-                    return (Var Skolem (translate n), t')
-                Nothing -> throwError ("typeConstraints: unbound variable " ++ show n)
-        f m (UApp e1 e2) = do
+                    t' <- lift $ type2hm ctx Map.empty t
+                    return (e, t')
+                Nothing -> throwError ("constraintsOf: unbound variable " ++ show n)
+        f _ (Var Unification _) = throwError "constraintsOf: illegal unification variable"
+        f m (App e1 e2) = do
             (e1', t1) <- f m e1
             (e2', t2) <- f m e2
             t <- Var Unification <$> fresh (s2n "t")
             x <- fresh (s2n "_")
             tell [(t1, Pi t2 (bind x t))]
             return (App e1' e2', t)
-        f m (ULambda z) = do
+        f m (Lambda _ z) = do
             (x, e) <- unbind z
+            -- need to freshen the type; ignore the unification variable!
             t1 <- Var Unification <$> fresh (s2n "t")
             (e', t2) <- f (Map.insert x t1 m) e
-            return (Lambda t1 (bind (translate x) e'), Pi t1 (bind (translate x) t2))
+            return (Lambda t1 (bind x e'), Pi t1 (bind x t2))
+        -- these only apply when types are under question
+        f _ e@(Sort c) = do
+            throwError "constraintsOf: unexpected sort! (we can do it, but what?!)"
+            t <- Sort <$> axiom c
+            return (e, t)
+        f m (Pi t1 z) = do
+            (x, t2) <- unbind z
+            (t1', k1) <- f m t1
+            (t2', k2) <- f (Map.insert x t1' m) t2
+            -- assume that entity under question is not a quantifier,
+            -- requires us to unpeel quantifiers first!!!
+            tell [(k1, Sort Star)]
+            -- lack of quantifiers means it's impossible for a polytype
+            -- to be introduced
+            tell [(k2, Sort Star)]
+            return (Pi t1' (bind x t2'), Sort Star)
 
 rmap f x = fmap (\(a,b) -> (a, f b)) x
 solve eq = f eq []
-    where f eq s = case eq of
+  where f eq s = case eq of
             [] -> return s
             ((t1, t2):eq') | t1 `aeq` t2 -> f eq' s
             ((Var Unification k, t):eq') | not (Set.member k (fv t)) ->
@@ -319,72 +347,35 @@ solve eq = f eq []
             ((Lambda t1 z1, Lambda t2 z2):eq') -> do
                 Just (_, e1, _, e2) <- unbind2 z1 z2
                 f ((t1,t2):(e1,e2):eq') s
-            _ -> throwError "Could not unify"
+            ((x,y):_) -> throwError ("Could not unify '" ++ ppshow x ++ "' and '" ++ ppshow y ++ "'")
 
 -- Converts unification variables into quantifiers, but with
 -- unification variables as their kinds. Does NOT right factor
--- quantifiers
-hm2type :: Context -> Expr -> Type -> GM (Expr, Type)
+-- quantifiers. (XXX fix that!)
+--
+-- Also returns an "inner type" (plus updated context) with the
+-- quantifiers removed.
+hm2type :: Context -> Expr -> Type -> GM (Expr, Type, Context, Type)
 hm2type m e t =
     let vs = Set.difference (fv t) (Map.keysSet m)
-        generate [] e t = return (e, t)
-        generate (x:xs) e t = do
+        generate [] e t inctx inty = return (e, t, inctx, inty)
+        generate (x:xs) e t inctx inty = do
             k <- Var Unification <$> fresh (s2n "k")
             generate xs (Lambda k (bind x (subst x (Var Skolem x) e)))
                         (Pi k (bind x (subst x (Var Skolem x) t)))
-    in generate (Set.elems vs) e t
+                        (Map.insert x k inctx)
+                        (subst x (Var Skolem x) inty)
+    in generate (Set.elems vs) e t m t
 
-{-
-kindConstraints :: Context -> Type -> GM ((Type, Kind), [(Kind, Kind)])
-kindConstraints ctx = runWriterT . f Map.empty
-  where f _ (Var Unification _) = throwError "kindConstraints: illegal unification variable"
--}
-
-{-
-
-translateHMType :: Map (Name Expr) Expr -> Set (Name Expr) -> Expr -> WriterT [(Expr, Expr)] GM Expr
-translateHMType _ _ (Sort _) = throwError "translateHMType: bug! sort"
-translateHMType _ _ (Lambda _ _) = throwError "translateHMType: bug! lambda"
-translateHMType _ _ e@(Var Skolem _) = return e
-translateHMType m uv (Var Unification n) = do
-    (_, uv', qs) <- calculateQuantifiers m uv (Set.singleton n)
-    unless (Set.null uv') $ throwError "translateHMType: bug! free variables never showed up!"
-    return (qs (Var Skolem (translate n)))
-translateHMType m uv (Pi t1 z) = do
-    (x, t2) <- unbind z
-    (m', uv', qs) <- calculateQuantifiers m uv (fv t1)
-    e1 <- translateHMType m' uv' t1
-    e2 <- translateHMType m' uv' t2
-    -- you might think we don't know what these kinds are... but we do!
-    -- Pis at this level are usually function arrows or quantifiers, but we
-    -- eliminated the quantifiers, so these must be function arrows!
-    -- So either it's t -> t : * or t -> p : *; we can resolve the
-    -- ambiguity by just generating free variables, and instantiating
-    -- unconstrained remaining unification variables to *
-    -- trace (ppshow (Map.toList m')) $ return ()
-    -- k1 <- upGM $ typeOf m' e1
-    -- k2 <- upGM $ typeOf m' e2
-    return (qs (Pi e1 (bind x e2)))
-translateHMType m uv (App t1 t2) = do
-    (m', uv', qs) <- calculateQuantifiers m uv (Set.union (fv t1) (fv t2))
-    e1 <- translateHMType m' uv' t1
-    e2 <- translateHMType m' uv' t2
-    ut <- Var Unification <$> fresh (s2n "k")
-    k1 <- upGM $ typeOf m' e1
-    k2 <- upGM $ typeOf m' e2
-    x <- fresh (s2n "_")
-    tell [(Pi k2 (bind x ut), k1)]
-    return (qs (App e1 e2))
--}
-
-inferType :: Context -> UExpr -> GM (Expr, Type)
+inferType :: Context -> Expr -> GM (Expr, Type)
 inferType ctx e = do
-    ((e, t), eq) <- typeConstraints ctx e
+    ((e, t), eq) <- constraintsOf ctx e
     subs <- solve eq
-    let t' = substs subs t
-        e' = substs subs e
-    (e'', t'') <- hm2type ctx e' t'
-    return (e'', t'')
+    (e', t', inctx, inty) <- hm2type ctx (substs subs e) (substs subs t)
+    -- trace (ppshow (Map.toList inctx)) $ return ()
+    (_, eq') <- constraintsOf inctx inty
+    subs' <- solve eq'
+    return (substs subs' e', substs subs' t')
 
 infer = runGM . inferType library
 
@@ -398,6 +389,13 @@ ppshow = PP.render . runLFreshM . ppr 0
 
 instance Pretty a => Pretty [a] where
     ppr _ xs = PP.vcat <$> mapM (ppr 0) xs
+
+instance Pretty (Map (Name Expr) Type) where
+    ppr _ m = PP.vcat <$> mapM f (Map.toList m)
+        where f (n, t) = do
+                pn <- ppr 0 n
+                pt <- ppr 0 t
+                return (pn <+> PP.colon <+> pt)
 
 instance Pretty (Name a) where
     ppr _ n = return (PP.text (show n))
@@ -427,12 +425,6 @@ instance Pretty Expr where
             else parr <$> ppr 1 t <*> ppr 0 e
     ppr p (App e1 e2) = prettyParen (p > 1) <$> ((<+>) <$> ppr 1 e1 <*> ppr 2 e2)
 
-instance Pretty UExpr where
-    ppr _ (UVar n) = return (PP.text (show n))
-    ppr p (ULambda z) = fmap (prettyParen (p > 0)) . lunbind z $ \(x,e) -> lam x <$> ppr 0 e
-        where lam x e = PP.hang (PP.text "λ" <> PP.text (show x) <> PP.text ".") 2 e
-    ppr p (UApp e1 e2) = prettyParen (p > 1) <$> ((<+>) <$> ppr 1 e1 <*> ppr 2 e2)
-
 prettyParen True = PP.parens
 prettyParen False = id
 parr a c = PP.hang a (-2) (PP.text "→"<+> c)
@@ -458,9 +450,12 @@ instance IsString (Name Expr) where fromString = string2Name
 (!:) = (,)
 infixr 1 !:
 
--- XXX we are taking it ON FAITH that these signatures are valid in
--- the system
-library = Map.fromList . runM . mapM (\(a,b) -> normalize b >>= \b' -> return (a, b')) $
+addToContext m (x, t) = do
+    t' <- prenexify m =<< normalize t
+    return (Map.insert x t' m)
+
+library :: Map (Name Expr) Type
+library = runM . foldM addToContext Map.empty $
     [ "μ"       !: (star ~> star) ~> star
     , "Prod"    !: star ~> star ~> star
     , "Int"     !: star
