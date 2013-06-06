@@ -223,7 +223,8 @@ runGM = either error id . runFreshM . runErrorT
 upGM = either throwError return . runLFreshM . runErrorT
 
 -- Convert a type from the full calculus to form appropriate for
--- Hindley-Milner.
+-- Hindley-Milner.  Also provides the necessary type applications
+-- for the removed quantifiers.
 --
 -- We need:
 --  - a local context 'm' (lets us do kind-checking)
@@ -235,13 +236,13 @@ upGM = either throwError return . runLFreshM . runErrorT
 --
 -- INVARIANT: all types in global context are beta-normalized!  Also,
 -- it's pretty important that 'unbind' gives us GLOBALLY unique names!
-type2hm :: Context -> Map (Name Type) (Name Type) -> Type -> GM Type
-type2hm _ _ e@(Sort _) = return e
-type2hm m u e@(Var Skolem n) | Just n' <- Map.lookup n u = return (Var Unification n')
-                             | Map.member n m = return e
+type2hm :: Context -> Map (Name Type) (Name Type) -> Type -> GM (Expr -> Expr, Type)
+type2hm _ _ e@(Sort _) = return (id, e)
+type2hm m u e@(Var Skolem n) | Just n' <- Map.lookup n u = return (id, Var Unification n')
+                             | Map.member n m = return (id, e)
                              | otherwise = throwError "type2hm: unbound skolem variable"
 -- HACK: to deal with kinds...
-type2hm _ _ e@(Var Unification _) = return e
+type2hm _ _ e@(Var Unification _) = return (id, e)
 type2hm m u e@(Pi ta z) = do
     (x, tb) <- unbind z
     t1 <- upGM $ typeOf m ta
@@ -251,12 +252,16 @@ type2hm m u e@(Pi ta z) = do
         -- in fact, lack of dependence states that any further types
         -- should type-check sans the annotation; we thus omit it and
         -- expect an unbound variable error if there actually was a problem
-        lateral = Pi <$> type2hm m u ta <*> fmap (bind x) (type2hm m u tb)
+        lateral = do
+            (_, ta') <- type2hm m u ta -- assert that this is identity
+            (f, tb') <- type2hm m u tb
+            return (f, Pi ta' (bind x tb'))
         -- polymorphism! add to the unification variable set but
         -- erase the constructor
         promote = do
             t <- fresh (s2n "t")
-            type2hm m' (Map.insert x t u) tb
+            (f, t') <- type2hm m' (Map.insert x t u) tb
+            return (f . flip App (Var Unification t), t')
     case (t1, t2) of
         (Sort s1, Sort s2) -> case (s1, s2) of
             (Star, Star)     -> lateral
@@ -276,7 +281,9 @@ type2hm m u (App t1 t2) = do
         _ -> throwError "type2hm: illegal kind"
     -- no attempt made at normalization; assumed already normalized, so
     -- must be an atomic App
-    App <$> type2hm m u t1 <*> type2hm m u t2
+    (_, t1') <- type2hm m u t1 -- assert this is identity
+    (f, t2') <- type2hm m u t2
+    return (f, App t1' t2')
 
 -- Converts an untyped lambda calculus term into a typed one, while
 -- simultaneously generating a list of constraints over unification
@@ -293,8 +300,8 @@ constraintsOf ctx = runWriterT . f Map.empty
                 Just t -> do
                     -- notice that 'm' is irrelevant for HM types; this
                     -- is because we have no dependence on terms
-                    t' <- lift $ type2hm ctx Map.empty t
-                    return (e, t')
+                    (wrap, t') <- lift $ type2hm ctx Map.empty t
+                    return (wrap e, t')
                 Nothing -> throwError ("constraintsOf: unbound variable " ++ show n)
         f _ (Var Unification _) = throwError "constraintsOf: illegal unification variable"
         f m (App e1 e2) = do
@@ -350,8 +357,7 @@ solve eq = f eq []
             ((x,y):_) -> throwError ("Could not unify '" ++ ppshow x ++ "' and '" ++ ppshow y ++ "'")
 
 -- Converts unification variables into quantifiers, but with
--- unification variables as their kinds. Does NOT right factor
--- quantifiers. (XXX fix that!)
+-- unification variables as their kinds.
 --
 -- Also returns an "inner type" (plus updated context) with the
 -- quantifiers removed.
@@ -372,7 +378,6 @@ inferType ctx e = do
     ((e, t), eq) <- constraintsOf ctx e
     subs <- solve eq
     (e', t', inctx, inty) <- hm2type ctx (substs subs e) (substs subs t)
-    -- trace (ppshow (Map.toList inctx)) $ return ()
     (_, eq') <- constraintsOf inctx inty
     subs' <- solve eq'
     return (substs subs' e', substs subs' t')
