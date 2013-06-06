@@ -504,4 +504,4 @@ exBlog = lam "x" ("D_i" # "Int")
                     ("Prod" # "Int" # "Int") #
                     ("ListF" # "Int") #
                     "plusinc" #
-                    ("pi" # "j" # ("μ" # ("ListF" # "Int")) # (("bucket" # "c" # "Int") # "x"))))
+                    ("pi" # ("μ" # ("ListF" # "Int")) # "j" # (("bucket" # "Int" # "c") # "x"))))
