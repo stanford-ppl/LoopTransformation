@@ -9,6 +9,7 @@
            , UndecidableInstances
            , NoMonomorphismRestriction
            , OverloadedStrings
+           , ViewPatterns
            #-}
 import Unbound.LocallyNameless
 import Data.Map (Map)
@@ -19,6 +20,7 @@ import Control.Monad.Trans.Maybe
 import Control.Applicative
 import Control.Monad
 import Control.Monad.Error
+-- import Control.Monad.Logic
 import Control.Monad.Trans.Writer
 import qualified Text.PrettyPrint as PP
 import Text.PrettyPrint (Doc, (<+>), (<>))
@@ -73,9 +75,17 @@ type M = ErrorT String (LFreshM)
 
 runM = either error id . runLFreshM . runErrorT
 
+{-
+-- the "stupid" lfresh instance
+instance (Fresh m) => LFresh m where
+    lfresh = fresh
+    avoid _ m = m
+    getAvoids = return Set.empty
+-}
+
 -- EVALUATION AND TYPE CHECKING
 
-beta :: Expr -> MaybeT M Expr
+beta :: (Monad m, Applicative m, LFresh m) => Expr -> MaybeT m Expr
 beta (Var _ _) = done
 beta (Sort _) = done
 beta Hole = done
@@ -212,22 +222,23 @@ erz = runGM . erase library
 
 What's going on here?
 
-* We have an untyped lambda calculus Expr, where all binding annotations
-  are fresh unification variables. Ordinarily, typing this
-  calculus would be straightforward. (Vanilla Hindley-Milner, and
-  for any unresolved type variables, we just slap quantifiers on the
-  front until it's good.  There is the somewhat delicate issue of
-  let-polymorphism--we then have to muck around with quantifier
-  instantiation--however, we're not including it in our language.)
+* We provide an *untyped* lambda calculus expressed as Expr with all
+  binding annotations erased into holes (and type-lambdas removed).
+  Ordinarily, typing this calculus would be straightforward, using vanilla
+  Hindley-Milner, and then tacking on quantifiers to deal with unresolved
+  type variables.
 
 * However, we have a global context which contains terms which are
-  typed in the full language.  Untyped Expr may refer to these terms, so
-  we need to consider them appropriately.
+  typed in the full language.  Programs may refer to these terms, so
+  we need to consider them appropriately in the context of HM
+  inference. Since we can assume the type judgements are prenex, all
+  we need to do is introduce fresh variables to bind to, and then
+  provide the necessary type applications.  This is what 'type2hm' is for.
 
-* In rank-1 polymorphic calculus, this is still not a big deal;
-  all such terms can be converted to prenex form, and then the
-  variables introduced freshly as new things to bind to.  This is
-  what 'type2hm' is for.
+* Furthermore, our language contains type constructors, so when quantifiers
+  are being instantiated, we need to fill them in with unification
+  variables for what the kinds are.  We then do a second pass to
+  generate constraints for these variables and solve them.
 
 -}
 
@@ -248,16 +259,17 @@ upGM = either throwError return . runLFreshM . runErrorT
 --  - note: global context is unnecessary; we can infer if a variable is free if
 --    it's not in the unification variable map
 --
--- INVARIANT: all types in global context are beta-normalized!  Also,
--- it's pretty important that 'unbind' gives us GLOBALLY unique names!
-type2hm :: Context -> Map (Name Type) (Name Type) -> Type -> GM (Expr -> Expr, Type)
-type2hm _ _ e@(Sort _) = return (id, e)
+-- INVARIANT: all types in global context are beta-normalized and in
+-- prenex form.  Also, it's pretty important that 'unbind' gives us
+-- GLOBALLY unique names!
+type2hm :: Context -> Map (Name Type) (Name Type) -> Type -> GM ([Name Type], Type)
+type2hm _ _ e@(Sort _) = return ([], e)
 type2hm _ _ Hole = throwError "type2hm: illegal hole"
-type2hm m u e@(Var Skolem n) | Just n' <- Map.lookup n u = return (id, Var Unification n')
-                             | Map.member n m = return (id, e)
+type2hm m u e@(Var Skolem n) | Just n' <- Map.lookup n u = return ([], Var Unification n')
+                             | Map.member n m = return ([], e)
                              | otherwise = throwError "type2hm: unbound skolem variable"
 -- HACK: to deal with kinds...
-type2hm _ _ e@(Var Unification _) = return (id, e)
+type2hm _ _ e@(Var Unification _) = return ([], e)
 type2hm m u e@(Pi ta z) = do
     (x, tb) <- unbind z
     t1 <- upGM $ typeOf m ta
@@ -276,7 +288,7 @@ type2hm m u e@(Pi ta z) = do
         promote = do
             t <- fresh (s2n "t")
             (f, t') <- type2hm m' (Map.insert x t u) tb
-            return (f . flip App (Var Unification t), t')
+            return (t : f, t')
     case (t1, t2) of
         (Sort s1, Sort s2) -> case (s1, s2) of
             (Star, Star)     -> lateral
@@ -312,8 +324,8 @@ constraintsOf ctx = runWriterT . f Map.empty
                 Just t -> do
                     -- notice that 'm' is irrelevant for HM types; this
                     -- is because we have no dependence on terms
-                    (wrap, t') <- lift $ type2hm ctx Map.empty t
-                    return (wrap e, t')
+                    (vs, t') <- lift $ type2hm ctx Map.empty t
+                    return (foldl (\s n -> App s (Var Unification n)) e vs, t')
                 Nothing -> throwError ("constraintsOf: unbound variable " ++ show n)
         f _ (Var Unification _) = throwError "constraintsOf: illegal unification variable"
         f _ Hole = throwError "constraintsOf: illegal hole"
@@ -351,27 +363,50 @@ constraintsOf ctx = runWriterT . f Map.empty
             tell [(k2, Sort Star)]
             return (Pi t1' (bind x t2'), Sort Star)
 
+mUnifier (Var Unification k, t) = Just (k, t)
+mUnifier (t, Var Unification k) = Just (k, t)
+mUnifier _ = Nothing
+
+mBeta (App (Lambda _ z) e, t) = Just (z, e, t)
+mBeta (t, App (Lambda _ z) e) = Just (z, e, t)
+mBeta _ = Nothing
+
+mArr (App f a, Pi t z) = Just (f, a, t, z)
+mArr (Pi t z, App f a) = Just (f, a, t, z)
+mArr _ = Nothing
+
 rmap f x = fmap (\(a,b) -> (a, f b)) x
-solve eq = f eq []
-  where f eq s = case eq of
-            [] -> return s
-            ((t1, t2):eq') | t1 `aeq` t2 -> f eq' s
-            ((Var Unification k, t):eq') | not (Set.member k (fv t)) ->
+solve :: [(Type, Type)] -> GM [(Name Type, Type)]
+solve eq = f False eq [] []
+  where f progress eq xeq s = case eq of
+            [] -> case xeq of
+                [] -> return s
+                _ | progress  -> f False (reverse xeq) [] s
+                  | otherwise -> throwError ("Could not unify these equations: " ++ ppshow xeq)
+            ((t1, t2):eq') | t1 `aeq` t2 -> f progress eq' xeq s
+            ((mUnifier -> Just (k, t)):eq') | not (Set.member k (fv t)) ->
                 let ts = subst k t
-                in f (map (\(a,b) -> (ts a, ts b)) eq')
-                     ((k,t):rmap ts s)
-            ((t, Var Unification k):eq') | not (Set.member k (fv t)) ->
-                let ts = subst k t
-                in f (map (\(a,b) -> (ts a, ts b)) eq')
-                     ((k,t):rmap ts s)
+                    mts = map (\(a,b) -> (ts a, ts b))
+                in f True (mts eq') (mts xeq) ((k,t):rmap ts s)
             ((Pi u1 z1, Pi u2 z2):eq') -> do
                 Just (_, v1, _, v2) <- unbind2 z1 z2
-                f ((u1,u2):(v1,v2):eq') s
-            ((App u1 v1, App u2 v2):eq') -> f ((u1,u2):(v1,v2):eq') s
+                f progress ((u1,u2):(v1,v2):eq') xeq s
+            ((App u1 v1, App u2 v2):eq') -> f progress ((u1,u2):(v1,v2):eq') xeq s
             ((Lambda t1 z1, Lambda t2 z2):eq') -> do
                 Just (_, e1, _, e2) <- unbind2 z1 z2
-                f ((t1,t2):(e1,e2):eq') s
-            ((x,y):_) -> throwError ("Could not unify '" ++ ppshow x ++ "' and '" ++ ppshow y ++ "'")
+                f progress ((t1,t2):(e1,e2):eq') xeq s
+            ((mArr -> Just (g, a, t1, z)):eq') -> do
+                -- very limited unification, just pretend the
+                -- constructor is (->) a
+                (x, t2) <- unbind z
+                y <- fresh "_"
+                f progress ((g,Lambda Hole (bind y (Pi t1 (bind x (Var Skolem y))))):(a,t2):eq') xeq s
+            -- why do we need to check for beta reducibility? if mArr
+            -- worked, it might introduce lambdas
+            ((mBeta -> Just (z, e, t)):eq') -> do
+                (x, e') <- unbind z
+                f progress ((subst x e e', t):eq') xeq s
+            (eq:eq') -> f False eq' (eq:xeq) s
 
 -- Converts unification variables into quantifiers, but with
 -- unification variables as their kinds.
@@ -400,6 +435,66 @@ inferType ctx e = do
     return (substs subs' e', substs subs' t')
 
 infer = runGM . inferType library
+
+-- REWRITING
+
+-- assumes "id" and "fmap" in the library
+
+type RewriteM = GM
+
+{-
+
+instance Fresh m => Fresh (LogicT m) where
+    fresh = lift . fresh
+-}
+
+-- Checks if a type indicates a natural transformation,
+-- e.g. something of the form ∀x. F x -> G x.  The return values
+-- are unbound F and G, i.e. the functors under question.
+-- There may be *multiple* ways a type can be a natural transformation;
+-- for example, ∀xy. F x y -> G x y (F and G are bifunctors, and by
+-- fixing x or y your get an appropriate natural transformation.)
+-- INVARIANT: Expr is prenex
+getNaturalTransformation :: Context -> Type -> GM [(Name Expr, Expr, Name Expr, Expr)]
+getNaturalTransformation m t = do
+    (_, t') <- type2hm m Map.empty t
+    undefined
+
+rewrite :: Context -> Expr -> RewriteM Expr
+rewrite _ (Sort _) = throwError "rewrite: unexpected sort"
+rewrite _ e@(Var _ _) = return e
+rewrite _ Hole = throwError "rewrite: unexpected hole"
+rewrite m (App e1 e2) = do
+    t <- upGM $ typeOf m e2
+    k <- upGM $ typeOf m t
+    e1' <- rewrite m e1
+    e2' <- case k of
+        Sort Star -> rewrite m e2
+        Sort StarStar -> rewrite m e2
+        _ -> return e2
+    return (App e1' e2')
+rewrite m (Lambda t z) = do
+    (x, e) <- unbind z
+    Lambda t . bind x <$> rewrite (Map.insert x t m) e
+rewrite _ (Pi _ _) = throwError "rewrite: unexpected pi"
+rewrite m (Compose t es) = do
+    -- do the magic!
+    es' <- mapM (rewrite m) es
+    -- XXX wibble the identities
+    let es'' = concatMap f es'
+        f (Compose _ es) = es
+        f e = [e]
+    -- commute natural transformations
+    let go rs (x:y:xs) = do
+            ex <- erase m x
+            (_, t) <- inferType m ex
+            trace (ppshow t) $ return ()
+            go (x:rs) (y:xs)
+        go rs xs = return (reverse rs ++ xs)
+    es''' <- go [] es''
+    return (Compose t es''')
+
+rr = runGM . rewrite library
 
 -- PRETTY PRINTING
 
@@ -493,6 +588,7 @@ library = runM . foldM addToContext Map.empty $
     , "fold"    !: forall "r" star (forall "f" (star ~> star) (("f" # "r" ~> "r") ~> "μ" # "f" ~> "r"))
     , "roll"    !: forall "f" (star ~> star) ("f" # ("μ" # "f") ~> "μ" # "f")
     , "fmap"    !: forall "f" (star ~> star) (forall "a" star (forall "b" star (("a" ~> "b") ~> ("f" # "a" ~> "f" # "b"))))
+    , "id"      !: forall "a" star ("a" ~> "a")
     , "succF"   !: forall "n" star ("n" ~> "NatF" # "n")
     , "di2list" !: "D_i" `phi` (lam "a" star ("μ" # ("ListF" # "a")))
     , "dj2list" !: "D_j" `phi` (lam "a" star ("μ" # ("ListF" # "a")))
@@ -502,6 +598,11 @@ library = runM . foldM addToContext Map.empty $
     , "tabulate_dj" !: (lam "a" star ("Ix_j" ~> "a")) `phi` "D_j"
     , "bucket"  !: "D_i" # "Ix_j" ~> "D_i" `phi` (lam "a" star ("D_j" # ("μ" # ("ListF" # "a"))))
     , "pi"      !: "Ix_j" ~> "D_j" `phi` (lam "a" star "a")
+    -- sample data
+    , "x"       !: "D_i" # "Int"
+    , "c"       !: ("D_i" # "Ix_j")
+    , "divide"  !: "Prod" # "Int" # "Int" ~> "Int"
+    , "plusinc" !: "ListF" # "Int" # ("Prod" # "Int" # "Int") ~> "Prod" # "Int" # "Int"
     ]
 
 -- EXAMPLES
@@ -519,11 +620,7 @@ exFold = lam "r" star
 exRoll = lam  "n" ("μ" # "NatF")
        $ "roll" # "NatF" # ("succF" # ("μ" # "NatF") # "n")
 
-exBlog = lam "x" ("D_i" # "Int")
-       . lam "c" ("D_i" # "Ix_j")
-       . lam "divide" ("Prod" # "Int" # "Int" ~> "Int")
-       . lam "plusinc" ("ListF" # "Int" # ("Prod" # "Int" # "Int") ~> "Prod" # "Int" # "Int")
-       $ "tabulate_dj" # "Int" # lam "j" "Ix_j"
+exBlog = "tabulate_dj" # "Int" # lam "j" "Ix_j"
              ("divide" #
                 ("fold" #
                     ("Prod" # "Int" # "Int") #
@@ -531,16 +628,16 @@ exBlog = lam "x" ("D_i" # "Int")
                     "plusinc" #
                     ("pi" # ("μ" # ("ListF" # "Int")) # "j" # (("bucket" # "Int" # "c") # "x"))))
 
-exBlog' = lam "x" ("D_i" # "Int")
-        . lam "c" ("D_i" # "Ix_j")
-        . lam "divide" ("Prod" # "Int" # "Int" ~> "Int")
-        . lam "plusinc" ("ListF" # "Int" # ("Prod" # "Int" # "Int") ~> "Prod" # "Int" # "Int")
-        $ "tabulate_dj" # "Int" # lam "j" "Ix_j"
-            (Compose ("D_i" # "Int") [ "divide"
-                                     , "fold" # ("Prod" # "Int" # "Int") # ("ListF" # "Int") # "plusinc"
-                                     , "pi" # ("μ" # ("ListF" # "Int")) # "j"
-                                     , "bucket" # "Int" # "c"
-                                     ] # "x")
+exBlog' = Compose ("D_i" # "Int")
+                  [ "tabulate_dj" # "Int"
+                  , "fmap" # (lam "a" star ("Ix_j" ~> "a")) # ("μ" # ("ListF" # "Int")) # "Int" #
+                        Compose ("μ" # ("ListF" # "Int"))
+                                [ "divide"
+                                , "fold" # ("Prod" # "Int" # "Int") # ("ListF" # "Int") # "plusinc"
+                                ]
+                  , "index_dj" # ("μ" # ("ListF" # "Int"))
+                  , "bucket" # "Int" # "c"
+                  ] # "x"
 
 exCompose = lam "a" star
           . lam "b" star
