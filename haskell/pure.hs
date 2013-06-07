@@ -25,7 +25,7 @@ import Control.Monad.Trans.Writer
 import qualified Text.PrettyPrint as PP
 import Text.PrettyPrint (Doc, (<+>), (<>))
 import Data.String
-import Debug.Trace
+-- import Debug.Trace
 
 -- DATA TYPES
 
@@ -341,11 +341,24 @@ constraintsOf ctx = runWriterT . f Map.empty
             (x, e) <- unbind z
             (e', t2) <- f (Map.insert x t1 m) e
             return (Lambda t1 (bind x e'), Pi t1 (bind x t2))
-        f m e@(Compose _ _) = do
+        f m (Compose pret1 es) = do
+            t1 <- if pret1 `aeq` Hole then Var Unification <$> fresh (s2n "t") else return pret1
+            x <- fresh (s2n "x") -- MASSIVE SHADOWING WARNING
+            -- XXX variable naming is fucked
+            let go rs (e1:es) t2 = do
+                    (e1',t1) <- f m e1
+                    t <- Var Unification <$> fresh (s2n "t")
+                    tell [(t1, Pi t2 (bind x t))]
+                    go (e1':rs) es t
+                go rs [] t2 = do
+                    return (Compose t1 rs, Pi t1 (bind x t2))
+            go [] (reverse es) t1
+            {- lazy man's way
             e' <- upGM . runMaybeT $ beta e
             case e' of
                 Just e'' -> f m e''
                 Nothing -> throwError "constraintsOf: unable to beta-reduce compose"
+            -}
         -- these only apply when types are under question
         f _ e@(Sort c) = do
             throwError "constraintsOf: unexpected sort! (we can do it, but what?!)"
@@ -399,7 +412,7 @@ solve eq = f False eq [] []
                 -- very limited unification, just pretend the
                 -- constructor is (->) a
                 (x, t2) <- unbind z
-                y <- fresh "_"
+                y <- fresh "y"
                 -- we expect this unification variable to immediately
                 -- disappear or immediately unify with another lambda
                 k <- Var Unification <$> fresh "k"
@@ -430,8 +443,13 @@ hm2type m e t =
 
 inferType :: Context -> Expr -> GM (Expr, Type)
 inferType ctx e = do
+    x <- Var Unification <$> fresh (s2n "_") -- "don't care result type"
+    unifyType ctx e x
+
+unifyType :: Context -> Expr -> Type -> GM (Expr, Type)
+unifyType ctx e expect_t = do
     ((e, t), eq) <- constraintsOf ctx e
-    subs <- solve eq
+    subs <- solve ((expect_t, t):eq)
     (e', t', inctx, inty) <- hm2type ctx (substs subs e) (substs subs t)
     (_, eq') <- constraintsOf inctx inty
     subs' <- solve eq'
@@ -447,27 +465,6 @@ type RewriteM = GM
 
 instance Fresh m => Fresh (LogicT m) where
     fresh = lift . fresh
-
--- Checks if a type indicates a natural transformation,
--- e.g. something of the form ∀x. F x -> G x.  The return values
--- are unbound F and G, i.e. the functors under question.
--- There may be *multiple* ways a type can be a natural transformation;
--- for example, ∀xy. F x y -> G x y (F and G are bifunctors, and by
--- fixing x or y your get an appropriate natural transformation.)
--- INVARIANT: Expr is prenex
-getNaturalTransformation :: Context -> Type -> LogicT GM (Name Expr, Expr, Expr)
-getNaturalTransformation m t = do
-    (qs, t') <- lift $ type2hm m Map.empty t
-    -- check for an arrow
-    case t' of
-      Pi t1 z -> do
-        (_, t2) <- unbind z
-        -- ok, good, now try all the quantifiers
-        msum . flip map qs $ \(x, k) -> do
-            -- XXX insert polarity constraint solving here
-            guard (k `aeq` Sort Star)
-            return (x, t1, t2)
-      _ -> mzero
 
 rewrite :: Context -> Expr -> RewriteM Expr
 rewrite _ (Sort _) = throwError "rewrite: unexpected sort"
@@ -494,24 +491,43 @@ rewrite m (Compose t es) = do
         f (Compose _ es) = es
         f e = [e]
     -- commute natural transformations
-    let go rs (x:y:xs) = do
-            ex <- erase m x
-            (_, t) <- inferType m ex
-            q <- observeManyT 1 (getNaturalTransformation m t) -- XXX BUT THERE MAY BE MULTIPLE!!!
-            case q of
-                [(xf, lf, rf)] -> do
-                    case y of
-                        App (App (App (App (Var Skolem sfmap) functor) ta) tb) f
-                            | sfmap == s2n "fmap"
-                              && (Lambda (Sort Star) (bind xf lf)) `aeq` functor
-                              -> let y' = App (App (App (App (Var Skolem sfmap) rf) ta) tb) f
-                                     x' = x -- XXX wrong
-                                 in go (y':rs) (x':xs)
-                        _ -> trace (ppshow y) $ go (x:rs) (y:xs)
-                [] -> go (x:rs) (y:rs)
-                _ -> throwError "XXX multiple candidates what do"
-        go rs xs = return (reverse rs ++ xs)
-    es''' <- go [] es''
+    let checkFmap ufmap = do
+            f <- fresh (s2n "f")
+            a <- fresh (s2n "a")
+            b <- fresh (s2n "b")
+            let m' = Map.insert f (star ~> star) m
+                xf = Var Skolem f
+                t = App xf (Var Unification a) ~> App xf (Var Unification b)
+            lift . runErrorT $ unifyType m' ufmap t
+        checkPhi uphi = do
+            f <- fresh (s2n "f")
+            g <- fresh (s2n "g")
+            a <- fresh (s2n "a")
+            let m' = Map.insert a star m
+                xa = Var Skolem a
+                t = App (Var Unification f) xa ~> App (Var Unification g) xa
+            lift . runErrorT $ unifyType m' uphi t
+        go rs (efmap:ephi:xs) t = do
+            ufmap <- erase m efmap
+            uphi <- erase m ephi
+            ans1 <- checkFmap ufmap
+            ans2 <- checkPhi uphi
+            -- ok go!
+            case (ans1, ans2) of
+                (Right _, Right _) -> do
+                    target <- upGM $ typeOf m (Compose t [ephi, efmap])
+                    -- XXX ick. Reconstituting the types is a pain
+                    (Compose _ [efmap', ephi'], _) <- unifyType m (Compose Hole [ufmap, uphi]) target
+                    -- duplication!
+                    x <- fresh (s2n "x")
+                    t' <- upGM $ typeOf (Map.insert x t m) (App ephi' (Var Skolem x))
+                    go (ephi':rs) (efmap':xs) t'
+                _ -> do
+                    x <- fresh (s2n "x")
+                    t' <- upGM $ typeOf (Map.insert x t m) (App efmap (Var Skolem x))
+                    go (efmap:rs) (ephi:xs) t'
+        go rs xs _ = return (reverse xs ++ rs)
+    es''' <- go [] (reverse es'') t
     return (Compose t es''')
 
 rr = runGM . rewrite library
