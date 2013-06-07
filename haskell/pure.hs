@@ -118,7 +118,7 @@ prenexify m e = go m e >>= \(f, e') -> return (f e')
             k <- typeOf m ta
             (f, tb') <- go (Map.insert x ta m) tb
             case k of
-                Sort Star -> return (f, Pi ta (bind x tb'))
+                Sort Star -> return (f, ta ~> tb')
                 Sort Box -> return (Pi ta . bind x . f, tb')
                 _ -> throwError "prenexify: error!"
         go _ e = return (id, e)
@@ -333,8 +333,7 @@ constraintsOf ctx = runWriterT . f Map.empty
             (e1', t1) <- f m e1
             (e2', t2) <- f m e2
             t <- Var Unification <$> fresh (s2n "t")
-            x <- fresh (s2n "x")
-            tell [(t1, Pi t2 (bind x t))]
+            tell [(t1, t2 ~> t)]
             return (App e1' e2', t)
         f m (Lambda pret1 z) = do
             t1 <- if pret1 `aeq` Hole then Var Unification <$> fresh (s2n "t") else return pret1
@@ -343,15 +342,14 @@ constraintsOf ctx = runWriterT . f Map.empty
             return (Lambda t1 (bind x e'), Pi t1 (bind x t2))
         f m (Compose pret1 es) = do
             t1 <- if pret1 `aeq` Hole then Var Unification <$> fresh (s2n "t") else return pret1
-            x <- fresh (s2n "x") -- MASSIVE SHADOWING WARNING
-            -- XXX variable naming is fucked
+            -- XXX variable naming is pretty terrible
             let go rs (e1:es) t2 = do
                     (e1',t1) <- f m e1
                     t <- Var Unification <$> fresh (s2n "t")
-                    tell [(t1, Pi t2 (bind x t))]
+                    tell [(t1, t2 ~> t)]
                     go (e1':rs) es t
                 go rs [] t2 = do
-                    return (Compose t1 rs, Pi t1 (bind x t2))
+                    return (Compose t1 rs, t1 ~> t2)
             go [] (reverse es) t1
             {- lazy man's way
             e' <- upGM . runMaybeT $ beta e
@@ -359,7 +357,7 @@ constraintsOf ctx = runWriterT . f Map.empty
                 Just e'' -> f m e''
                 Nothing -> throwError "constraintsOf: unable to beta-reduce compose"
             -}
-        -- these only apply when types are under question
+        -- these only apply when types are under question (solving kinds)
         f _ e@(Sort c) = do
             throwError "constraintsOf: unexpected sort! (we can do it, but what?!)"
             t <- Sort <$> axiom c
@@ -466,6 +464,16 @@ type RewriteM = GM
 instance Fresh m => Fresh (LogicT m) where
     fresh = lift . fresh
 
+-- XXX There is one important missing ingredient to this: when we
+-- conclude something has functor-nature, we should generate a set of
+-- constraints on the environment, saying, "This is only true if these
+-- are functors."  The idea is to not build polarity into the kind
+-- system, but instead use polarity to automatically discharge proof
+-- obligations when functor can be automatically created.  I believe
+-- this is precisely type-class style constraint solving, where polarity
+-- is modeled as two type-classes (positive and negative), an
+-- unspecified polarity is when there is no constraint, and a constant
+-- polarity is when there are both.
 rewrite :: Context -> Expr -> RewriteM Expr
 rewrite _ (Sort _) = throwError "rewrite: unexpected sort"
 rewrite _ e@(Var _ _) = return e
@@ -486,11 +494,28 @@ rewrite _ (Pi _ _) = throwError "rewrite: unexpected pi"
 rewrite m (Compose t es) = do
     -- do the magic!
     es' <- mapM (rewrite m) es
-    -- XXX wibble the identities
-    let es'' = concatMap f es'
-        f (Compose _ es) = es
-        f e = [e]
-    -- commute natural transformations
+
+    -- XXX there are a lot of missing rules. I've just implemented the
+    -- really important one:
+
+    -- commute natural transformations to canonical form (in this case,
+    -- all loaded on the right; but you can play around and put them on
+    -- the left, etc.)
+
+    -- XXX need to do this repeatedly (atm things will only shift once).
+    -- Try not to end up with a bubblesort!
+
+    -- What's the general strategy here?  The idea is that we can check
+    -- whether or not something is an fmap/natural transformation by
+    -- respectively skolemizing a functor/type and checking if the
+    -- erased version of the expression unifies with it.  In a real
+    -- rewrite system, these checks are the "predicates" which various
+    -- rewrite rules run to figure out if things are kosher or not.
+    --
+    -- Possible optimization: when a function checks out as an
+    -- fmap/natural transformation, expand to include the next unit, and
+    -- see if fmap/natural transformation nature is preserved!
+    --
     let checkFmap ufmap = do
             f <- fresh (s2n "f")
             a <- fresh (s2n "a")
@@ -512,23 +537,43 @@ rewrite m (Compose t es) = do
             uphi <- erase m ephi
             ans1 <- checkFmap ufmap
             ans2 <- checkPhi uphi
+            let calcNext e = do
+                    x <- fresh (s2n "x")
+                    upGM $ typeOf (Map.insert x t m) (App e (Var Skolem x))
+                nop = go (efmap:rs) (ephi:xs) =<< calcNext efmap
             -- ok go!
             case (ans1, ans2) of
                 (Right _, Right _) -> do
                     target <- upGM $ typeOf m (Compose t [ephi, efmap])
-                    -- XXX ick. Reconstituting the types is a pain
-                    (Compose _ [efmap', ephi'], _) <- unifyType m (Compose Hole [ufmap, uphi]) target
-                    -- duplication!
-                    x <- fresh (s2n "x")
-                    t' <- upGM $ typeOf (Map.insert x t m) (App ephi' (Var Skolem x))
-                    go (ephi':rs) (efmap':xs) t'
-                _ -> do
-                    x <- fresh (s2n "x")
-                    t' <- upGM $ typeOf (Map.insert x t m) (App efmap (Var Skolem x))
-                    go (efmap:rs) (ephi:xs) t'
+                    -- Reconstituting the types is important, since the
+                    -- rewrite can still fail at this point.
+                    --
+                    -- Consider this case:
+                    --
+                    --      F : * -> *
+                    --      G : * -> *
+                    --      phi : F (G a) -> a
+                    --      f : Int -> G Int
+                    --    ----------------------------
+                    --      phi . fmap f : F Int -> Int
+                    --
+                    -- Here we cannot commute, because phi/fmap disagree what the
+                    -- functor is.  This is caught when we type-check the
+                    -- result of the rewrite.
+                    --
+                    -- XXX A nontrivial proof obligation is to show that
+                    -- this check is sufficient.  This does not seem
+                    -- obviously the case, although all the examples I
+                    -- can come up with end up working one way or
+                    -- another
+                    r <- lift . runErrorT $ unifyType m (Compose Hole [ufmap, uphi]) target
+                    case r of
+                        Right (Compose _ [efmap', ephi'], _) -> go (ephi':rs) (efmap':xs) =<< calcNext ephi'
+                        _ -> nop
+                _ -> nop
         go rs xs _ = return (reverse xs ++ rs)
-    es''' <- go [] (reverse es'') t
-    return (Compose t es''')
+    es'' <- go [] (reverse es') t
+    return (Compose t es'')
 
 rr = runGM . rewrite library
 
