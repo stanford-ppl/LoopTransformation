@@ -531,6 +531,17 @@ exBlog = lam "x" ("D_i" # "Int")
                     "plusinc" #
                     ("pi" # ("μ" # ("ListF" # "Int")) # "j" # (("bucket" # "Int" # "c") # "x"))))
 
+exBlog' = lam "x" ("D_i" # "Int")
+        . lam "c" ("D_i" # "Ix_j")
+        . lam "divide" ("Prod" # "Int" # "Int" ~> "Int")
+        . lam "plusinc" ("ListF" # "Int" # ("Prod" # "Int" # "Int") ~> "Prod" # "Int" # "Int")
+        $ "tabulate_dj" # "Int" # lam "j" "Ix_j"
+            (Compose ("D_i" # "Int") [ "divide"
+                                     , "fold" # ("Prod" # "Int" # "Int") # ("ListF" # "Int") # "plusinc"
+                                     , "pi" # ("μ" # ("ListF" # "Int")) # "j"
+                                     , "bucket" # "Int" # "c"
+                                     ] # "x")
+
 exCompose = lam "a" star
           . lam "b" star
           . lam "c" star
