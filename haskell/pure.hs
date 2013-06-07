@@ -20,7 +20,7 @@ import Control.Monad.Trans.Maybe
 import Control.Applicative
 import Control.Monad
 import Control.Monad.Error
--- import Control.Monad.Logic
+import Control.Monad.Logic
 import Control.Monad.Trans.Writer
 import qualified Text.PrettyPrint as PP
 import Text.PrettyPrint (Doc, (<+>), (<>))
@@ -262,7 +262,7 @@ upGM = either throwError return . runLFreshM . runErrorT
 -- INVARIANT: all types in global context are beta-normalized and in
 -- prenex form.  Also, it's pretty important that 'unbind' gives us
 -- GLOBALLY unique names!
-type2hm :: Context -> Map (Name Type) (Name Type) -> Type -> GM ([Name Type], Type)
+type2hm :: Context -> Map (Name Type) (Name Type) -> Type -> GM ([(Name Type, Kind)], Type)
 type2hm _ _ e@(Sort _) = return ([], e)
 type2hm _ _ Hole = throwError "type2hm: illegal hole"
 type2hm m u e@(Var Skolem n) | Just n' <- Map.lookup n u = return ([], Var Unification n')
@@ -272,9 +272,9 @@ type2hm m u e@(Var Skolem n) | Just n' <- Map.lookup n u = return ([], Var Unifi
 type2hm _ _ e@(Var Unification _) = return ([], e)
 type2hm m u e@(Pi ta z) = do
     (x, tb) <- unbind z
-    t1 <- upGM $ typeOf m ta
+    k1 <- upGM $ typeOf m ta
     let m' = Map.insert x ta m
-    t2 <- upGM $ typeOf m' tb
+    k2 <- upGM $ typeOf m' tb
     let -- since arrows do not introduce new type variables, u is unmodified;
         -- in fact, lack of dependence states that any further types
         -- should type-check sans the annotation; we thus omit it and
@@ -288,8 +288,8 @@ type2hm m u e@(Pi ta z) = do
         promote = do
             t <- fresh (s2n "t")
             (f, t') <- type2hm m' (Map.insert x t u) tb
-            return (t : f, t')
-    case (t1, t2) of
+            return ((t, ta) : f, t')
+    case (k1, k2) of
         (Sort s1, Sort s2) -> case (s1, s2) of
             (Star, Star)     -> lateral
             (Star, StarStar) -> lateral
@@ -325,7 +325,7 @@ constraintsOf ctx = runWriterT . f Map.empty
                     -- notice that 'm' is irrelevant for HM types; this
                     -- is because we have no dependence on terms
                     (vs, t') <- lift $ type2hm ctx Map.empty t
-                    return (foldl (\s n -> App s (Var Unification n)) e vs, t')
+                    return (foldl (\s n -> App s (Var Unification n)) e (map fst vs), t')
                 Nothing -> throwError ("constraintsOf: unbound variable " ++ show n)
         f _ (Var Unification _) = throwError "constraintsOf: illegal unification variable"
         f _ Hole = throwError "constraintsOf: illegal hole"
@@ -400,7 +400,10 @@ solve eq = f False eq [] []
                 -- constructor is (->) a
                 (x, t2) <- unbind z
                 y <- fresh "_"
-                f progress ((g,Lambda Hole (bind y (Pi t1 (bind x (Var Skolem y))))):(a,t2):eq') xeq s
+                -- we expect this unification variable to immediately
+                -- disappear or immediately unify with another lambda
+                k <- Var Unification <$> fresh "k"
+                f progress ((g,Lambda k (bind y (Pi t1 (bind x (Var Skolem y))))):(a,t2):eq') xeq s
             -- why do we need to check for beta reducibility? if mArr
             -- worked, it might introduce lambdas
             ((mBeta -> Just (z, e, t)):eq') -> do
@@ -442,11 +445,8 @@ infer = runGM . inferType library
 
 type RewriteM = GM
 
-{-
-
 instance Fresh m => Fresh (LogicT m) where
     fresh = lift . fresh
--}
 
 -- Checks if a type indicates a natural transformation,
 -- e.g. something of the form ∀x. F x -> G x.  The return values
@@ -455,10 +455,19 @@ instance Fresh m => Fresh (LogicT m) where
 -- for example, ∀xy. F x y -> G x y (F and G are bifunctors, and by
 -- fixing x or y your get an appropriate natural transformation.)
 -- INVARIANT: Expr is prenex
-getNaturalTransformation :: Context -> Type -> GM [(Name Expr, Expr, Name Expr, Expr)]
+getNaturalTransformation :: Context -> Type -> LogicT GM (Name Expr, Expr, Expr)
 getNaturalTransformation m t = do
-    (_, t') <- type2hm m Map.empty t
-    undefined
+    (qs, t') <- lift $ type2hm m Map.empty t
+    -- check for an arrow
+    case t' of
+      Pi t1 z -> do
+        (_, t2) <- unbind z
+        -- ok, good, now try all the quantifiers
+        msum . flip map qs $ \(x, k) -> do
+            -- XXX insert polarity constraint solving here
+            guard (k `aeq` Sort Star)
+            return (x, t1, t2)
+      _ -> mzero
 
 rewrite :: Context -> Expr -> RewriteM Expr
 rewrite _ (Sort _) = throwError "rewrite: unexpected sort"
@@ -488,8 +497,19 @@ rewrite m (Compose t es) = do
     let go rs (x:y:xs) = do
             ex <- erase m x
             (_, t) <- inferType m ex
-            trace (ppshow t) $ return ()
-            go (x:rs) (y:xs)
+            q <- observeManyT 1 (getNaturalTransformation m t) -- XXX BUT THERE MAY BE MULTIPLE!!!
+            case q of
+                [(xf, lf, rf)] -> do
+                    case y of
+                        App (App (App (App (Var Skolem sfmap) functor) ta) tb) f
+                            | sfmap == s2n "fmap"
+                              && (Lambda (Sort Star) (bind xf lf)) `aeq` functor
+                              -> let y' = App (App (App (App (Var Skolem sfmap) rf) ta) tb) f
+                                     x' = x -- XXX wrong
+                                 in go (y':rs) (x':xs)
+                        _ -> trace (ppshow y) $ go (x:rs) (y:xs)
+                [] -> go (x:rs) (y:rs)
+                _ -> throwError "XXX multiple candidates what do"
         go rs xs = return (reverse rs ++ xs)
     es''' <- go [] es''
     return (Compose t es''')
@@ -522,6 +542,13 @@ instance (Pretty a, Pretty b) => Pretty (a, b) where
         pa <- ppr 0 a
         pb <- ppr 0 b
         return (PP.parens (pa <> PP.comma PP.$$ pb))
+
+instance (Pretty a, Pretty b, Pretty c) => Pretty (a, b, c) where
+    ppr _ (a, b, c) = do
+        pa <- ppr 0 a
+        pb <- ppr 0 b
+        pc <- ppr 0 c
+        return (PP.parens (pa <> PP.comma <+> pb <> PP.comma <+> pc))
 
 instance Pretty Sort where
     ppr _ Box = return (PP.text "☐")
