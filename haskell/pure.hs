@@ -20,7 +20,7 @@ import Control.Monad.Trans.Maybe
 import Control.Applicative
 import Control.Monad
 import Control.Monad.Error
-import Control.Monad.Logic
+-- import Control.Monad.Logic
 import Control.Monad.Trans.Writer
 import qualified Text.PrettyPrint as PP
 import Text.PrettyPrint (Doc, (<+>), (<>))
@@ -461,8 +461,10 @@ infer = runGM . inferType library
 
 type RewriteM = GM
 
+{-
 instance Fresh m => Fresh (LogicT m) where
     fresh = lift . fresh
+-}
 
 -- XXX There is one important missing ingredient to this: when we
 -- conclude something has functor-nature, we should generate a set of
