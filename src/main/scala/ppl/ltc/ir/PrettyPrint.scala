@@ -16,15 +16,44 @@ object PrettyPrint {
     }
   }
 
+  def pprint(htype: HPolyType): String = pprint(htype, 0, 10)
 
-  def pprint(htype: HType): String = pprint(htype, 0)
-
-  def pprint(htype: HType, ld: Int): String = htype match {
-    case TVar(i) => if(i <= ld) ('α' + (ld - i)).toChar.toString else ("T" + i.toString)
-    case TArr(l, r) => pprint(l, ld) + " ——> " + pprint(r, ld)
-    case TLambda(d, b) => "Λ " + ('α' + ld).toChar.toString + ": " + pprint(d) + ". " + pprint(b, ld+1)
-    case TApp(fx, arg) => pprint(fx, ld) + " " + pprint(arg, ld)
+  def pprint(htype: HPolyType, ld: Int, pri: Int): String = {
+    val (opri, rv) = htype match {
+      case TVar(i) => (0, if(i <= ld) ('α' + (ld - i)).toChar.toString else ("T" + i.toString))
+      case TArr(l, r) => (2, pprint(l, ld, 1) + " ——> " + pprint(r, ld, 2))
+      case TApp(f, a) => (1, pprint(f, ld, 1) + " " + pprint(a, ld, 0))
+      case TLambda(d, b) => (3, "Λ (" + ('α' + ld).toChar.toString + ": " + pprint(d) + "). " + pprint(b, ld+1, 3))
+      case TAll(d, b) => (3, "∀ (" + ('α' + ld).toChar.toString + ": " + pprint(d) + "). " + pprint(b, ld+1, 3))
+    }
+    if(pri < opri) {
+      "(" + rv + ")"
+    }
+    else {
+      rv
+    }
   }
+
+  
+  def pprint(hexpr: HExpr): String = pprint(hexpr, 0, 0, 10)
+
+  def pprint(hexpr: HExpr, ld: Int, tld: Int, pri: Int): String = {
+    val (opri, rv) = hexpr match {
+      case EVar(i) => (0, if(i <= ld) ('a' + (ld - i)).toChar.toString else ("X" + i.toString))
+      case EApp(f, a) => (2, pprint(f, ld, tld, 2) + " " + pprint(a, ld, tld, 1))
+      case ETApp(f, a) => (1, pprint(f, ld, tld, 1) + "[" + pprint(a, tld, 10) + "]")
+      case ELambda(d, b) => (4, "λ (" + ('a' + ld).toChar.toString + ": " + pprint(d, tld, 10) + "). " + pprint(b, ld+1, tld, 4))
+      case ETLambda(d, b) => (4, "Λ (" + ('α' + tld).toChar.toString + ": " + pprint(d) + "). " + pprint(b, ld, tld+1, 4))
+      case ETAll(d, b) => (4, "∀ (" + ('α' + tld).toChar.toString + ": " + pprint(d) + "). " + pprint(b, ld, tld+1, 4))
+    }
+    if(pri < opri) {
+      "(" + rv + ")"
+    }
+    else {
+      rv
+    }
+  }
+  
 
   /*
   def pprint(hexpr: HExpr): String = pprint(hexpr, 10)

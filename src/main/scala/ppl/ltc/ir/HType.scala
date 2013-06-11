@@ -3,22 +3,26 @@ package ppl.ltc.ir
 import scala.collection._
 
 
-sealed trait HType {
+sealed trait HPolyType {
   override def toString: String = PrettyPrint.pprint(this)
-  def -->(c: HType): HType = TArr(this, c)
+}
+
+sealed trait HMonoType extends HPolyType {
+  def -->(c: HMonoType): HMonoType = TArr(this, c)
 }
 object --> {
-  def unapply(t: HType): Option[Tuple2[HType, HType]] = t match {
+  def unapply(t: HMonoType): Option[Tuple2[HMonoType, HMonoType]] = t match {
     case TArr(lhs, rhs) => Some((lhs, rhs))
     case _ => None
   }
 }
 
-case class TVar(idx: Int) extends HType { if(idx <= 0) throw new IRValidationException() }
-case class TArr(lhs: HType, rhs: HType) extends HType
-case class TLambda(dom: HKind, body: HType) extends HType
-case class TApp(fx: HType, arg: HType) extends HType
+case class TVar(idx: Int) extends HMonoType { if(idx <= 0) throw new IRValidationException() }
+case class TArr(lhs: HMonoType, rhs: HMonoType) extends HMonoType
+case class TApp(fx: HMonoType, arg: HMonoType) extends HMonoType
 
+case class TLambda(dom: HKind, body: HPolyType) extends HPolyType
+case class TAll(dom: HKind, body: HPolyType) extends HPolyType
 
 /*
 sealed trait HType {

@@ -2,6 +2,21 @@ package ppl.ltc.ir
 
 import scala.collection._
 
+
+object TypeInference {
+  def typeOf(e: HExpr): HType = typeOf(e, Seq(), Seq())
+
+  def typeOf(e: HExpr, ctx: Seq[HType], tctx: Seq[HKind]): HType = e match {
+    case EVar(i) => if(i <= ctx.length) ctx(i-1) else throw new TypeInferenceException("unbound variable: " + i)
+    case EApp(e1, e2) => {
+      val t1 = typeOf(e1, ctx, tctx)
+      val t2 = typeOf(e2, ctx, tctx)
+      
+    }
+  }
+}
+
+
 /*
 class TypeInferenceException(msg: String) extends Exception(msg)
 

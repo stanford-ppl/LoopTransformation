@@ -2,6 +2,19 @@ package ppl.ltc.ir
 
 import scala.collection._
 
+
+sealed trait HExpr {
+  override def toString: String = PrettyPrint.pprint(this)
+}
+
+
+case class EVar(idx: Int) extends HExpr { if(idx <= 0) throw new IRValidationException() }
+case class EApp(fx: HExpr, arg: HExpr) extends HExpr
+case class ETApp(fx: HExpr, arg: HMonoType) extends HExpr
+case class ELambda(dom: HMonoType, body: HExpr) extends HExpr
+case class ETLambda(dom: HKind, body: HExpr) extends HExpr
+case class ETAll(dom: HKind, body: HExpr) extends HExpr
+
 /*
 sealed trait HExpr {
   override def toString: String = PrettyPrint.pprint(this)
