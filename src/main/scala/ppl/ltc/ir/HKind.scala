@@ -5,5 +5,5 @@ sealed trait HKind {
 }
 
 object KType extends HKind
-case class KArr(p: Polarity, lhs: HKind, rhs: HKind) extends HKind
+case class KArr(lhs: HKind, rhs: HKind) extends HKind
 

@@ -3,17 +3,79 @@ package ppl.ltc.ir
 import scala.collection._
 
 
-object TypeInference {
-  def typeOf(e: HExpr): HType = typeOf(e, Seq(), Seq())
+class TypeInferenceException(msg: String) extends Exception(msg)
 
-  def typeOf(e: HExpr, ctx: Seq[HType], tctx: Seq[HKind]): HType = e match {
-    case EVar(i) => if(i <= ctx.length) ctx(i-1) else throw new TypeInferenceException("unbound variable: " + i)
-    case EApp(e1, e2) => {
-      val t1 = typeOf(e1, ctx, tctx)
-      val t2 = typeOf(e2, ctx, tctx)
-      
+object TypeInference {
+  var freshIdx: Int = 0
+  val constraints = mutable.Stack[(HPolyType, HPolyType)]()
+
+
+  def fresh: HMonoType = {
+    freshIdx += 1
+    TVar(freshIdx)
+  }
+
+  def occurs(t: HPolyType, id: Int): Boolean = t match {
+    case TVar(i) => (i == id)
+    case TArr(l, r) => occurs(l, id) || occurs(r, id)
+    case TApp(f, a) => occurs(f, id) || occurs(a, id)
+    case TLambda(d, b) => occurs(b, id + 1)
+    case TAll(d, b) => occurs(b, id + 1)
+  }
+
+  def monotypify(t: HPolyType): HMonoType = t match {
+    case m: HMonoType => m
+    case _ => {
+      val tf = fresh
+      constraints.push((t, tf))
+      tf
     }
   }
+
+  def constraintsOf(e: HExpr, ctx: Seq[HMonoType]): HPolyType = e match {
+    case EVar(i) => if(i <= ctx.length) ctx(i-1) else throw new TypeInferenceException("unbound variable: " + i)
+    case ELambda(b) => {
+      val tf = fresh
+      val trv = monotypify(constraintsOf(b, tf +: ctx))
+      tf --> trv
+    }
+    case EApp(e1, e2) => {
+      val t1 = constraintsOf(e1, ctx)
+      val t2 = monotypify(constraintsOf(e2, ctx))
+      val tf = fresh
+      constraints.push((t2 --> tf, t1))
+      tf
+    }
+  }
+
+  object TVarEx {
+    def unapply(c:(HPolyType, HPolyType)):Option[(Int, HPolyType)] = c match {
+      case (TVar(i), t) => Some (i, t)
+      case (t, TVar(i)) => Some (i, t)
+      case _ => None
+    }
+  }
+
+  def solve: Map[Int, HPolyType] = {
+    val acc = mutable.Map[Int, HPolyType]()
+    while(constraints.size > 0) {
+      val c = constraints.pop()
+      c match {
+        case (t1, t2) if t1 == t2 => 
+        case TVarEx(i, t) if !occurs(t, i) => {
+          val m = Map(i -> t)
+          constraints.transform{case (ta, tb) => (ta.subst(m), tb.subst(m))}
+          acc.transform{case (k, t) => t.subst(m)}
+          acc += (i -> t)
+        }
+        case (TApp(f1, a1), TApp(f2, a2)) if f1 == f2 => {
+          constraints.pushAll(a1.zip(a2))
+        }
+        case _ => throw new TypeInferenceException("could not unify constraint: " + c.toString)
+      }
+    }
+    acc
+  }  
 }
 
 

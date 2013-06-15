@@ -6,7 +6,7 @@ object PrettyPrint {
   def pprint(hkind: HKind, pri: Int): String = {
     val (opri, rv) = hkind match {
       case KType => (0, "★")
-      case KArr(p, l, r) => (1, pprint(l, 0) + " →" + p.toString + " " + pprint(r, 1))
+      case KArr(l, r) => (1, pprint(l, 0) + " → " + pprint(r, 1))
     }
     if(pri < opri) {
       "(" + rv + ")"
@@ -41,10 +41,10 @@ object PrettyPrint {
     val (opri, rv) = hexpr match {
       case EVar(i) => (0, if(i <= ld) ('a' + (ld - i)).toChar.toString else ("X" + i.toString))
       case EApp(f, a) => (2, pprint(f, ld, tld, 2) + " " + pprint(a, ld, tld, 1))
-      case ETApp(f, a) => (1, pprint(f, ld, tld, 1) + "[" + pprint(a, tld, 10) + "]")
-      case ELambda(d, b) => (4, "λ (" + ('a' + ld).toChar.toString + ": " + pprint(d, tld, 10) + "). " + pprint(b, ld+1, tld, 4))
-      case ETLambda(d, b) => (4, "Λ (" + ('α' + tld).toChar.toString + ": " + pprint(d) + "). " + pprint(b, ld, tld+1, 4))
-      case ETAll(d, b) => (4, "∀ (" + ('α' + tld).toChar.toString + ": " + pprint(d) + "). " + pprint(b, ld, tld+1, 4))
+      //case ETApp(f, a) => (1, pprint(f, ld, tld, 1) + "[" + pprint(a, tld, 10) + "]")
+      case ELambda(b) => (4, "λ (" + ('a' + ld).toChar.toString + ". " + pprint(b, ld+1, tld, 4))
+      //case ETLambda(d, b) => (4, "Λ (" + ('α' + tld).toChar.toString + ": " + pprint(d) + "). " + pprint(b, ld, tld+1, 4))
+      //case ETAll(d, b) => (4, "∀ (" + ('α' + tld).toChar.toString + ": " + pprint(d) + "). " + pprint(b, ld, tld+1, 4))
     }
     if(pri < opri) {
       "(" + rv + ")"
