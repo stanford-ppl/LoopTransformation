@@ -1,5 +1,22 @@
 package ppl.ltc.ir
 
+import scala.language.implicitConversions
+
+object ScalaEmbedding {
+  private var globalIdx: Int = 0
+  class SCESym(val idx: Int)
+
+  implicit def sym2hexpr(x: SCESym): HExpr = EVar(globalIdx - x.idx)
+
+  def elambda(fx: SCESym => HExpr): HExpr = {
+    val x = new SCESym(globalIdx)
+    globalIdx += 1
+    val e = fx(x)
+    globalIdx -= 1
+    ELambda(e)
+  }
+}
+
 /*
 import scala.language.implicitConversions
 

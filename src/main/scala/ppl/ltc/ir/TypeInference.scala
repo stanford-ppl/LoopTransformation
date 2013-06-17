@@ -137,7 +137,7 @@ class TypeInference {
         case (t1, t2) if t1 == t2 => 
         case TVarEx(i, t) if !occurs(t, i) => {
           val tm = for(k <- 1 to freshIdx) yield {
-            if(k < i) TVar(k)
+            if(k <= i) TVar(k)
             else TVar(k - 1)
           }
           val m = for(k <- 1 to freshIdx) yield {

@@ -67,6 +67,7 @@ class KindInference {
 
   lazy val solution: mutable.Seq[HKind] = mutable.Seq((for(k <- 1 to freshIdx) yield KVar(k)):_*)
   def solve: Seq[HKind] = {
+    solution
     while(constraints.size > 0) {
       solveStep()
     }

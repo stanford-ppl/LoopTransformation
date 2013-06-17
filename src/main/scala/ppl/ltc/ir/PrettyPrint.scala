@@ -44,6 +44,7 @@ object PrettyPrint {
 
   def pprint(hexpr: HExpr, ld: Int, tld: Int, pri: Int): String = {
     val (opri, rv) = hexpr match {
+      case EApp(EApp(ECompose, x), y) => (5, pprint(x, ld, tld, 5) + " ∘ " + pprint(y, ld, tld, 4))
       case EVar(i) => (0, if(i <= ld) ('a' + (ld - i)).toChar.toString else ("X" + i.toString))
       case EApp(f, a) => (2, pprint(f, ld, tld, 2) + " " + pprint(a, ld, tld, 1))
       case ETApp(f, a) => (1, pprint(f, ld, tld, 1) + "[" + pprint(a, tld, 10) + "]")

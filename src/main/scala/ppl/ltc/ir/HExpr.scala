@@ -25,6 +25,9 @@ sealed trait HExpr {
       case x: EPrimitive => 0
     }
   }
+  def apply(x: HExpr): HExpr = EApp(this, x)
+  def apply(t: HMonoType): HExpr = ETApp(this, t)
+  def *(y: HExpr): HExpr = EApp(EApp(ECompose, this), y)
 }
 
 case class EVar(idx: Int) extends HExpr { if(idx <= 0) throw new IRValidationException() }
@@ -40,6 +43,11 @@ sealed trait EPrimitive extends HExpr {
 object EFMap extends EPrimitive {
   val name: String = "fmap"
   val htype: HMonoType = TLambda(KArr(KType, KType), (TVar(2) --> TVar(3)) --> (TApp(TVar(1), TVar(2)) --> TApp(TVar(1), TVar(3))))
+}
+
+object ECompose extends EPrimitive {
+  val name: String = "(∘)"
+  val htype: HMonoType = (TVar(1) --> TVar(2)) --> ((TVar(2) --> TVar(3)) --> (TVar(1) --> TVar(3)))
 }
 
 /* things we may want */
