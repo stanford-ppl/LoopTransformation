@@ -3,13 +3,44 @@ package ppl.ltc.ir
 import scala.collection._
 
 
-sealed trait HPolyType {
+sealed trait HType {
   override def toString: String = PrettyPrint.pprint(this)
+  def freeIdx: Int = {
+    import scala.math.max
+    this match {
+      case TVar(i) => i
+      case TArr(l, r) => max(l.freeIdx, r.freeIdx)
+      case TApp(f, a) => max(f.freeIdx, a.freeIdx)
+      case TLambda(d, b) => max(0, b.freeIdx - 1)
+      case PVar(i) => i
+      case PApp(f, a) => max(f.freeIdx, a.freeIdx)
+      case PLambda(d, b) => max(0, b.freeIdx - 1)
+      case PAllM(d, b) => max(0, b.freeIdx - 1)
+      case PAllP(d, b) => max(0, b.freeIdx - 1)
+    }
+  }
+  def freeKindIdx: Int = {
+    import scala.math.max
+    this match {
+      case TVar(i) => 0
+      case TArr(l, r) => max(l.freeKindIdx, r.freeKindIdx)
+      case TApp(f, a) => max(f.freeKindIdx, a.freeKindIdx)
+      case TLambda(d, b) => max(d.freeIdx, b.freeKindIdx)
+      case PVar(i) => 0
+      case PApp(f, a) => max(f.freeKindIdx, a.freeKindIdx)
+      case PLambda(d, b) => max(d.freeIdx, b.freeKindIdx)
+      case PAllM(d, b) => max(d.freeIdx, b.freeKindIdx)
+      case PAllP(d, b) => max(d.freeIdx, b.freeKindIdx)
+    }
+  }
 }
 
-sealed trait HMonoType extends HPolyType {
+sealed trait HMonoType extends HType {
   def -->(c: HMonoType): HMonoType = TArr(this, c)
 }
+
+sealed trait HPolyType extends HType
+
 object --> {
   def unapply(t: HMonoType): Option[Tuple2[HMonoType, HMonoType]] = t match {
     case TArr(lhs, rhs) => Some((lhs, rhs))
@@ -20,9 +51,19 @@ object --> {
 case class TVar(idx: Int) extends HMonoType { if(idx <= 0) throw new IRValidationException() }
 case class TArr(lhs: HMonoType, rhs: HMonoType) extends HMonoType
 case class TApp(fx: HMonoType, arg: HMonoType) extends HMonoType
+case class TLambda(dom: HKind, body: HMonoType) extends HMonoType
 
-case class TLambda(dom: HKind, body: HPolyType) extends HPolyType
-case class TAll(dom: HKind, body: HPolyType) extends HPolyType
+case class PVar(idx: Int) extends HPolyType { if(idx <= 0) throw new IRValidationException() }
+case class PApp(fx: HPolyType, arg: HMonoType) extends HPolyType
+case class PLambda(dom: HKind, body: HPolyType) extends HPolyType
+case class PAllM(dom: HKind, body: HMonoType) extends HPolyType
+case class PAllP(dom: HKind, body: HPolyType) extends HPolyType
+object PAll {
+  def apply(d: HKind, t: HType): HPolyType = t match {
+    case tm: HMonoType => PAllM(d, tm)
+    case tp: HPolyType => PAllP(d, tp)
+  }
+}
 
 /*
 sealed trait HType {

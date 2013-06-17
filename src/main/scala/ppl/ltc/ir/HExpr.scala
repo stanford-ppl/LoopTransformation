@@ -5,12 +5,42 @@ import scala.collection._
 
 sealed trait HExpr {
   override def toString: String = PrettyPrint.pprint(this)
+  def freeIdx: Int = {
+    import scala.math.max
+    this match {
+      case EVar(i) => i
+      case EApp(f, a) => max(f.freeIdx, a.freeIdx)
+      case ETApp(f, a) => f.freeIdx
+      case ELambda(b) => b.freeIdx - 1
+      case x: EPrimitive => 0
+    }
+  }
+  def freeTypeIdx: Int = {
+    import scala.math.max
+    this match {
+      case EVar(i) => 0
+      case EApp(f, a) => max(f.freeTypeIdx, a.freeTypeIdx)
+      case ETApp(f, a) => max(f.freeTypeIdx, a.freeIdx)
+      case ELambda(b) => b.freeTypeIdx
+      case x: EPrimitive => 0
+    }
+  }
 }
-
 
 case class EVar(idx: Int) extends HExpr { if(idx <= 0) throw new IRValidationException() }
 case class EApp(fx: HExpr, arg: HExpr) extends HExpr
+case class ETApp(fx: HExpr, arg: HMonoType) extends HExpr
 case class ELambda(body: HExpr) extends HExpr
+
+sealed trait EPrimitive extends HExpr {
+  val name: String
+  val htype: HMonoType
+}
+
+object EFMap extends EPrimitive {
+  val name: String = "fmap"
+  val htype: HMonoType = TLambda(KArr(KType, KType), (TVar(2) --> TVar(3)) --> (TApp(TVar(1), TVar(2)) --> TApp(TVar(1), TVar(3))))
+}
 
 /* things we may want */
 // case class ETyped(type: HMonoType, body: HExpr) extends HExpr
