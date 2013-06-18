@@ -6,24 +6,25 @@ package ppl.ltc.ir
 // ezyang: this rewriter doesn't have type information
 object Rewriter {
   def rewrite(x: HExpr): HExpr = {
-    for(p <- primitives) {
-      if(x == p) return p
-    }
+    // if x is primitive, we can't rewrite it
+    if(x.isInstanceOf[EPrimitive]) return x
+    // try all the rules on x
     for(r <- rules) {
       val rax = r(x)
       if(rax != x) return rewrite(rax)
     }
+    // try to rewrite components of the expression
     x match {
-      case ELambda(n, u) => {
+      case ELambda(u) => {
         val ru = rewrite(u)
         if(ru == u) {
           x
         }
         else {
-          rewrite(ELambda(n, ru))
+          rewrite(ELambda(ru))
         }
       }
-      case EApply(f, a) => {
+      case EApp(f, a) => {
         val rf = rewrite(f)
         val ra = rewrite(a)
         if((rf == f)&&(ra == a)) {

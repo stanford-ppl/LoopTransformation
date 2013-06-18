@@ -60,7 +60,6 @@ object PrettyPrint {
       rv
     }
   }
-  
 
   /*
   def pprint(hexpr: HExpr): String = pprint(hexpr, 10)
