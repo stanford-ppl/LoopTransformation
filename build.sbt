@@ -6,7 +6,7 @@ scalacOptions += "-deprecation"
 
 scalacOptions += "-feature"
 
-initialCommands in console := "import ppl.ltc.ir._; import ScalaEmbedding._"
+initialCommands in console := "import ppl.ltc.rewrite._; import ScalaEmbedding._"
 
 libraryDependencies ++= Seq(
   "org.scalatest" %% "scalatest" % "1.9.1" % "test"
