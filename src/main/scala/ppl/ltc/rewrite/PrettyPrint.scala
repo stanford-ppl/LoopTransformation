@@ -61,7 +61,7 @@ object PrettyPrint {
 
   def pps(x: HKind): PP = x match {
     case KType => PP(0, "★")
-    case KArr(l, r) => PP(1, pps(l).req(0) + " → " + pps(r).req(1))
+    case KArr(p, l, r) => PP(1, pps(l).req(0) + " →" + p.toString + " " + pps(r).req(1))
   }
 
   def pps(x: HType, tld: Int): PP = x match {

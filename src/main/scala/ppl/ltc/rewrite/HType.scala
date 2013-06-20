@@ -19,7 +19,7 @@ sealed trait HType {
       val kf = f.hkind
       val ka = a.hkind
       kf match {
-        case KArr(l, r) if l == ka => r
+        case KArr(p, l, r) if l == ka => r
         case _ => throw new IRValidationException()
       }
     }
@@ -30,7 +30,7 @@ sealed trait HType {
       KType
     }
     case TLambda(d, b) => {
-      d --> b.hkind
+      KArr(b.polarityIn(1), d, b.hkind)
     }
   }
 
@@ -57,8 +57,28 @@ sealed trait HType {
     case TLambda(d, b) => b.tvarKind(idx+1)
   }
 
+  def polarityIn(idx: Int): Polarity = this match {
+    case TVar(i, k) => if(idx == i) Positive else Constant
+    case TArr(l, r) => (-l.polarityIn(idx)) lub (r.polarityIn(idx))
+    case TApp(f, a) => {
+      f.hkind match {
+        case KArr(p, l, r) => p * a.polarityIn(idx)
+        case _ => throw new IRValidationException()
+      }
+    }
+    case TLambda(d, b) => b.polarityIn(idx + 1)
+  }
+
   def -->(c: HType): HType = TArr(this, c)
 }
+
+object --> {
+  def unapply(t: HType): Option[Tuple2[HType, HType]] = t match {
+    case TArr(lhs, rhs) => Some((lhs, rhs))
+    case _ => None
+  }
+}
+
 
 case class TVar(idx: Int, k: HKind) extends HType { if(idx <= 0) throw new IRValidationException() }
 case class TArr(lhs: HType, rhs: HType) extends HType

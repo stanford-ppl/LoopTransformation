@@ -5,17 +5,6 @@ import scala.language.implicitConversions
 
 class IRValidationException extends Exception
 
-object --> {
-  def unapply(t: HType): Option[Tuple2[HType, HType]] = t match {
-    case TArr(lhs, rhs) => Some((lhs, rhs))
-    case _ => None
-  }
-  def unapply(t: HKind): Option[Tuple2[HKind, HKind]] = t match {
-    case KArr(lhs, rhs) => Some((lhs, rhs))
-    case _ => None
-  }
-}
-
 object Util {
   def agree[T >: Null](x: T, y: T): T = {
     if(x == null) y
@@ -43,7 +32,7 @@ object ScalaEmbedding {
     TLambda(k, b)
   }
 
-  def tlambda(k: HKind, f: SSType => HExpr): HExpr = {
+  def etlambda(k: HKind, f: SSType => HExpr): HExpr = {
     val s = new SSType(tdepth, k)
     tdepth += 1
     val b = f(s)
