@@ -2,6 +2,11 @@ package ppl.ltc.rewrite
 
 object PrettyPrint {
 
+  private var displayContext: Boolean = false
+
+  def contextOff { displayContext = false }
+  def contextOn { displayContext = true }
+
   case class PP(val opri: Int, val rv: String) {
     def req(pri: Int): String = {
       if(pri < opri) {
@@ -17,12 +22,14 @@ object PrettyPrint {
   def pprint(x: HType): String = {
     val fti = x.freeTIdx
     var rv = pps(x, fti).rv
-    var ifx = " ├– "
-    for(i <- 1 to fti) yield {
-      val k = x.tvarKind(i)
-      if(k != null) {
-        rv = ('α' + (fti - i)).toChar.toString + ": " + pps(k).rv + ifx + rv
-        ifx = ", "
+    if(displayContext) {
+      var ifx = " ├– "
+      for(i <- 1 to fti) yield {
+        val k = x.tvarKind(i)
+        if(k != null) {
+          rv = ('α' + (fti - i)).toChar.toString + ": " + pps(k).rv + ifx + rv
+          ifx = ", "
+        }
       }
     }
     rv
@@ -31,20 +38,22 @@ object PrettyPrint {
     val fi = x.freeIdx
     val fti = x.freeTIdx
     var rv = pps(x, fi, fti).rv
-    var ifx = " ├– "
-    for(i <- 1 to fi) yield {
-      val t = x.varType(i)
-      if(t != null) {
-        rv = ('a' + (fi - i)).toChar.toString + ": " + pps(t, fti).rv + ifx + rv
-        ifx = ", "
+    if(displayContext) {
+      var ifx = " ├– "
+      for(i <- 1 to fi) yield {
+        val t = x.varType(i)
+        if(t != null) {
+          rv = ('a' + (fi - i)).toChar.toString + ": " + pps(t, fti).rv + ifx + rv
+          ifx = ", "
+        }
       }
-    }
-    ifx = " ├– "
-    for(i <- 1 to fti) yield {
-      val k = x.tvarKind(i)
-      if(k != null) {
-        rv = ('α' + (fti - i)).toChar.toString + ": " + pps(k).rv + ifx + rv
-        ifx = ", "
+      ifx = " ├– "
+      for(i <- 1 to fti) yield {
+        val k = x.tvarKind(i)
+        if(k != null) {
+          rv = ('α' + (fti - i)).toChar.toString + ": " + pps(k).rv + ifx + rv
+          ifx = ", "
+        }
       }
     }
     rv

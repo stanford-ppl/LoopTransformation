@@ -3,31 +3,63 @@ package ppl.ltc.rewrite
 import scala.collection._
 
 object Rewriter {
-  def rewrite(x: HExpr): Set[HExpr] = {
+  def rewrite(x: HExpr): Set[HExpr] = rewrite(x, mutable.Map())
+
+  def rewrite(x: HExpr, memomap: mutable.Map[HExpr, Set[HExpr]]): Set[HExpr] = {
+    if(memomap.contains(x)) return memomap(x)
     // create an accumulator set
-    val acc: mutable.Set[HExpr] = Set(x)
-    // try all the rules on x
-    for(r <- rules) {
-      val rax = r(x)
-      if(rax != x) return rewrite(rax)
+    val acc: mutable.Set[HExpr] = mutable.Set(x)
+    // create a working set
+    val working: mutable.Set[HExpr] = mutable.Set(x)
+    // define a processing function
+    def proc(u: HExpr) {
+      if(!(acc contains u)) {
+        acc += u
+        working += u
+      }
     }
-    // try to rewrite components of the expression
-    val rv = x match {
-      case ELambda(d, u) => ELambda(d, rewrite(u))
-      case ETLambda(d, u) => ETLambda(d, rewrite(u))
-      case EApp(f, a) => EApp(rewrite(f), rewrite(a))
-      case ETApp(f, a) => ETApp(rewrite(f), a)
-      case _ => x
+    // loop over the working set
+    while(working.size > 0) {
+      val elem = working.head
+      working -= elem
+      for(r <- rules) {
+        proc(r(x))
+      }
+      val rsx = elem match {
+        case ELambda(d, u) => {
+          for(w <- rewrite(u, memomap)) {
+            proc(ELambda(d, w))
+          }
+        }
+        case ETLambda(d, u) => {
+          for(w <- rewrite(u, memomap)) {
+            proc(ETLambda(d, w))
+          }
+        }
+        case EApp(f, a) => {
+          val rf = rewrite(f, memomap)
+          val ra = rewrite(a, memomap)
+          for(wf <- rf) {
+            for(wa <- ra) {
+              proc(EApp(wf, wa))
+            }
+          }
+        }
+        case ETApp(f, a) => {
+          for(w <- rewrite(f, memomap)) {
+            proc(ETApp(w, a))
+          }
+        }
+        case _ => 
+      }
     }
-    if(rv == x) {
-      x
-    }
-    else {
-      rewrite(rv)
-    }
+    // store the result in the memoization map
+    memomap(x) = acc
+    // and return
+    acc
   }
 
-  def rules: Seq[RewriteRule] = Seq(RRComposeAssocLeft)
+  def rules: Seq[RewriteRule] = Seq(RRComposeAssocLeft, RRComposeAssocRight)
 }
 
 trait RewriteRule {
@@ -37,6 +69,13 @@ trait RewriteRule {
 object RRComposeAssocLeft extends RewriteRule {
   def apply(x: HExpr): HExpr = x match {
     case f ∘ (g ∘ h) => (f ∘ g) ∘ h
+    case _ => x
+  }
+}
+
+object RRComposeAssocRight extends RewriteRule {
+  def apply(x: HExpr): HExpr = x match {
+    case (f ∘ g) ∘ h => f ∘ (g ∘ h)
     case _ => x
   }
 }
