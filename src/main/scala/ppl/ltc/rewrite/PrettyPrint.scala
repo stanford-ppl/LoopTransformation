@@ -69,6 +69,7 @@ object PrettyPrint {
     case TArr(l, r) => PP(2, pps(l, tld).req(1) + " ——> " + pps(r, tld).req(2))
     case TApp(f, a) => PP(1, pps(f, tld).req(1) + " " + pps(a, tld).req(0))
     case TLambda(d, b) => PP(3, "Λ (" + ('α' + tld).toChar.toString + ": " + pps(d).rv + "). " + pps(b, tld+1).req(3))
+    case p: TPrimitive => PP(0, p.name)
   }
 
   def pps(x: HExpr, ld: Int, tld: Int): PP = x match {
@@ -80,7 +81,7 @@ object PrettyPrint {
     case ETApp(f, a) => PP(1, pps(f, ld, tld).req(1) + "[" + pps(a, tld).rv + "]")
     case ELambda(d, b) => PP(6, "λ (" + ('a' + ld).toChar.toString + ": " + pps(d, tld).rv + "). " + pps(b, ld+1, tld).req(6))
     case ETLambda(d, b) => PP(6, "Λ (" + ('α' + tld).toChar.toString + ": " + pps(d).rv + "). " + pps(b, ld, tld+1).req(6))
-    case EPrimitive(p) => PP(0, p.name)
+    case p: EPrimitive => PP(0, p.name)
   }
 }
 

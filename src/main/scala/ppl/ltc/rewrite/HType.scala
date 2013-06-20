@@ -10,6 +10,7 @@ sealed trait HType {
       case TArr(l, r) => max(l.freeTIdx, r.freeTIdx)
       case TApp(f, a) => max(f.freeTIdx, a.freeTIdx)
       case TLambda(d, b) => max(0, b.freeTIdx - 1)
+      case p: TPrimitive => 0
     }
   }
 
@@ -32,6 +33,7 @@ sealed trait HType {
     case TLambda(d, b) => {
       KArr(b.polarityIn(1), d, b.hkind)
     }
+    case p: TPrimitive => p.hkind
   }
 
   def beta: HType = this match {
@@ -46,6 +48,7 @@ sealed trait HType {
     case TArr(l, r) => TArr(l.tsub(m), r.tsub(m))
     case TApp(f, a) => TApp(f.tsub(m), a.tsub(m))
     case TLambda(d, b) => TLambda(d, b.tsub((i,k) => if(i == 1) TVar(1,k) else m(i-1,k).tshift))
+    case p: TPrimitive => p
   }
 
   def tshift: HType = tsub((i,k) => TVar(i+1,k))
@@ -55,6 +58,7 @@ sealed trait HType {
     case TArr(l, r) => Util.agree(l.tvarKind(idx), r.tvarKind(idx))
     case TApp(f, a) => Util.agree(f.tvarKind(idx), a.tvarKind(idx))
     case TLambda(d, b) => b.tvarKind(idx+1)
+    case p: TPrimitive => null
   }
 
   def polarityIn(idx: Int): Polarity = this match {
@@ -67,9 +71,11 @@ sealed trait HType {
       }
     }
     case TLambda(d, b) => b.polarityIn(idx + 1)
+    case p: TPrimitive => Constant
   }
 
   def -->(c: HType): HType = TArr(this, c)
+  def apply(t: HType): HType = TApp(this, t)
 }
 
 object --> {
@@ -85,4 +91,12 @@ case class TArr(lhs: HType, rhs: HType) extends HType
 case class TApp(fx: HType, arg: HType) extends HType
 case class TLambda(dom: HKind, body: HType) extends HType
 
+sealed trait TPrimitive extends HType {
+  val name: String
+  override val hkind: HKind = null
+}
 
+object TPList extends TPrimitive {
+  val name: String = "list"
+  override val hkind: HKind = KType -->+ KType
+}

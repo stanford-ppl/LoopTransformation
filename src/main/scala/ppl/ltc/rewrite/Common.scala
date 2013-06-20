@@ -47,5 +47,15 @@ object ScalaEmbedding {
     edepth -= 1
     ELambda(t, b)
   }
+
+  def fmap(f: HType)(x: HExpr): HExpr = {
+    x.htype match {
+      case TArr(l, r) => EPFMap(f)(l)(r)(x)
+      case _ => throw new IRValidationException()
+    }
+  }
+
+  val ★ = KType
+  val functor = ★ -->+ ★
 }
 

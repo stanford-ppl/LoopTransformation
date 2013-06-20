@@ -3,10 +3,15 @@ package ppl.ltc.rewrite
 import scala.collection._
 
 object Rewriter {
-  def rewrite(x: HExpr): Set[HExpr] = rewrite(x, mutable.Map())
+  def rewrite(x: HExpr): Set[HExpr] = {
+    dispX = x
+    rewrite(x, mutable.Map())
+  }
 
+  private var dispX: HExpr = null
   def rewrite(x: HExpr, memomap: mutable.Map[HExpr, Set[HExpr]]): Set[HExpr] = {
     if(memomap.contains(x)) return memomap(x)
+    val xtype = x.htype
     // create an accumulator set
     val acc: mutable.Set[HExpr] = mutable.Set(x)
     // create a working set
@@ -14,6 +19,7 @@ object Rewriter {
     // define a processing function
     def proc(u: HExpr) {
       if(!(acc contains u)) {
+        if(u.htype != xtype) throw new IRValidationException()
         acc += u
         working += u
       }
@@ -23,9 +29,9 @@ object Rewriter {
       val elem = working.head
       working -= elem
       for(r <- rules) {
-        proc(r(x))
+        proc(r(elem))
       }
-      val rsx = elem match {
+      elem match {
         case ELambda(d, u) => {
           for(w <- rewrite(u, memomap)) {
             proc(ELambda(d, w))
@@ -59,7 +65,8 @@ object Rewriter {
     acc
   }
 
-  def rules: Seq[RewriteRule] = Seq(RRComposeAssocLeft, RRComposeAssocRight)
+  def rules: Seq[RewriteRule] = Seq(RRComposeAssocLeft, RRComposeAssocRight, RRFMapFusion, RRFMapDeFusion, 
+    RRNTransCommLeft, RRNTransCommRight)
 }
 
 trait RewriteRule {
@@ -76,6 +83,48 @@ object RRComposeAssocLeft extends RewriteRule {
 object RRComposeAssocRight extends RewriteRule {
   def apply(x: HExpr): HExpr = x match {
     case (f ∘ g) ∘ h => f ∘ (g ∘ h)
+    case _ => x
+  }
+}
+
+object RRFMapFusion extends RewriteRule {
+  def apply(x: HExpr): HExpr = x match {
+    case (EApp(ETApp(ETApp(ETApp(EPFMap, f), lf), rf), u) ∘ EApp(ETApp(ETApp(ETApp(EPFMap, g), lg), rg), v)) 
+      if ((f == g)&&(rg == lf)) =>
+        EPFMap(f)(lg)(rf)(u ∘ v)
+    case _ => x
+  }
+}
+
+object RRFMapDeFusion extends RewriteRule {
+  def apply(x: HExpr): HExpr = x match {
+    case EApp(ETApp(ETApp(ETApp(EPFMap, f), l), r), u ∘ v) => {
+      u.htype match {
+        case ul --> ur => EPFMap(f)(ul)(r)(u) ∘ EPFMap(f)(l)(ul)(v)
+      }
+    }
+    case _ => x
+  }
+}
+
+object RRNTransCommLeft extends RewriteRule {
+  def apply(x: HExpr): HExpr = x match {
+    case EApp(ETApp(ETApp(ETApp(EPFMap, h), lf), rf), u) ∘ ETApp(n, v) if (lf == v) => n.htype.beta match {
+      case TLambda(KType, TArr(TApp(f, TVar(1, KType)), TApp(g, TVar(1, KType)))) if(g == h) => {
+        n(rf) ∘ EApp(ETApp(ETApp(ETApp(EPFMap, f), lf), rf), u)
+      }
+    }
+    case _ => x
+  }
+}
+
+object RRNTransCommRight extends RewriteRule {
+  def apply(x: HExpr): HExpr = x match {
+    case ETApp(n, v) ∘ EApp(ETApp(ETApp(ETApp(EPFMap, h), lf), rf), u) if (rf == v) => n.htype.beta match {
+      case TLambda(KType, TArr(TApp(f, TVar(1, KType)), TApp(g, TVar(1, KType)))) if(f == h) => {
+        EApp(ETApp(ETApp(ETApp(EPFMap, g), lf), rf), u) ∘ n(lf)
+      }
+    }
     case _ => x
   }
 }

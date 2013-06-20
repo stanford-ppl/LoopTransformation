@@ -12,7 +12,7 @@ sealed trait HExpr {
       case ETApp(f, a) => f.freeIdx
       case ELambda(d, b) => b.freeIdx - 1
       case ETLambda(d, b) => b.freeIdx
-      case EPrimitive(p) => 0
+      case p: EPrimitive => 0
     }
   }
   def freeTIdx: Int = {
@@ -23,7 +23,7 @@ sealed trait HExpr {
       case ETApp(f, a) => max(f.freeTIdx, a.freeTIdx)
       case ELambda(d, b) => max(d.freeTIdx, b.freeTIdx)
       case ETLambda(d, b) => max(0, b.freeTIdx - 1)
-      case EPrimitive(p) => 0
+      case p: EPrimitive => 0
     }
   }
 
@@ -53,7 +53,7 @@ sealed trait HExpr {
     case ETLambda(d, b) => {
       TLambda(d, b.htype)
     }
-    case EPrimitive(p) => p.htype
+    case p: EPrimitive => p.htype
   }
 
   def tsub(m: (Int, HKind) => HType): HExpr = this match {
@@ -62,7 +62,7 @@ sealed trait HExpr {
     case ETApp(f, a) => ETApp(f.tsub(m), a.tsub(m))
     case ELambda(d, b) => ELambda(d.tsub(m), b.tsub(m))
     case ETLambda(d, b) => ETLambda(d, b.tsub((i,k) => if(i == 1) TVar(1, k) else m(i-1,k).tshift))
-    case EPrimitive(p) => this
+    case p: EPrimitive => this
   }
 
   def tshift: HExpr = tsub((i,k) => TVar(i+1,k))
@@ -77,7 +77,7 @@ sealed trait HExpr {
     case ETApp(f, a) => ETApp(f.sub(m), a)
     case ELambda(d, b) => ELambda(d, b.sub((i,t) => if(i == 1) EVar(1, d) else m(i,t).shift))
     case ETLambda(d, b) => ETLambda(d, b.sub(m))
-    case EPrimitive(p) => this
+    case p: EPrimitive => this
   }
 
   def shift: HExpr = sub((i,t) => EVar(i+1, t))
@@ -88,7 +88,7 @@ sealed trait HExpr {
     case ETApp(f, a) => Util.agree(f.tvarKind(idx), a.tvarKind(idx))
     case ELambda(d, b) => Util.agree(d.tvarKind(idx), b.tvarKind(idx))
     case ETLambda(d, b) => b.tvarKind(idx+1)
-    case EPrimitive(p) => null
+    case p: EPrimitive => null
   }
 
   def varType(idx: Int): HType = this match {
@@ -97,7 +97,7 @@ sealed trait HExpr {
     case ETApp(f, a) => f.varType(idx)
     case ELambda(d, b) => b.varType(idx+1)
     case ETLambda(d, b) => b.varType(idx)
-    case EPrimitive(p) => null
+    case p: EPrimitive => null
   }
 
   def apply(x: HExpr): HExpr = EApp(this, x)
@@ -106,14 +106,14 @@ sealed trait HExpr {
     val TArr(lx, rx) = this.htype
     val TArr(ly, ry) = y.htype
     if(ry != lx) throw new IRValidationException()
-    EPrimitive(PCompose)(ly)(ry)(rx)(this)(y)
+    EPCompose(ly)(ry)(rx)(this)(y)
   }
   def *(y: HExpr): HExpr = this ∘ y
 }
 
 object ∘ {
   def unapply(x: HExpr): Option[Tuple2[HExpr, HExpr]] = x match {
-    case EApp(EApp(ETApp(ETApp(ETApp(EPrimitive(PCompose), a), b), c), f), g) => Some((f, g))
+    case EApp(EApp(ETApp(ETApp(ETApp(EPCompose, a), b), c), f), g) => Some((f, g))
     case _ => None
   }
 }
@@ -124,4 +124,26 @@ case class ETApp(fx: HExpr, arg: HType) extends HExpr
 case class ELambda(dom: HType, body: HExpr) extends HExpr
 case class ETLambda(dom: HKind, body: HExpr) extends HExpr
 
-case class EPrimitive(p: HPrimitive) extends HExpr
+sealed trait EPrimitive extends HExpr {
+  val name: String
+  override val htype: HType = null
+}
+
+import ScalaEmbedding._
+
+object EPCompose extends EPrimitive {
+  val name = "(∘)"
+  override val htype: HType = tlambda(★, a => tlambda(★, b => tlambda(★, c => 
+    (b --> c) --> ((a --> b) --> (a --> c)))))
+}
+
+object EPFMap extends EPrimitive {
+  val name = "fmap"
+  override val htype: HType = tlambda(★ -->+ ★, f => tlambda(★, a => tlambda(★, b => 
+    (a --> b) --> (f(a) --> f(b)))))
+}
+
+object EPMyNTrans extends EPrimitive {
+  val name: String = "nt"
+  override val htype: HType = tlambda(★, a => TPList(a) --> TPList(a))
+}
