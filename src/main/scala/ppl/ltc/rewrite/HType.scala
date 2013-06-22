@@ -100,3 +100,18 @@ object TPList extends TPrimitive {
   val name: String = "list"
   override val hkind: HKind = KType -->+ KType
 }
+
+object TPInt extends TPrimitive {
+  val name: String = "int"
+  override val hkind: HKind = KType
+}
+
+object TPFloat extends TPrimitive {
+  val name: String = "float"
+  override val hkind: HKind = KType
+}
+
+object TPBool extends TPrimitive {
+  val name: String = "bool"
+  override val hkind: HKind = KType
+}
