@@ -48,9 +48,37 @@ object ScalaEmbedding {
     ELambda(t, b)
   }
 
+  def tnew(): SSType = tnew(KType)
+  def tnew(k: HKind): SSType = {
+    tdepth += 1
+    new SSType(tdepth - 1, k)
+  }
+
+  def enew(t: HType): SSExpr = {
+    edepth += 1
+    new SSExpr(edepth - 1, t)
+  }
+
+  def tfree(s: SSType) {
+    tdepth -= 1
+    if(tdepth != s.o) throw new IRValidationException()
+  }
+
+  def efree(s: SSExpr) {
+    edepth -= 1
+    if(edepth != s.o) throw new IRValidationException()
+  }
+
   def fmap(f: HType)(x: HExpr): HExpr = {
     x.htype match {
-      case TArr(l, r) => EPFMap(f)(l)(r)(x)
+      case l --> r => EPFMap(f)(l)(r)(x)
+      case _ => throw new IRValidationException()
+    }
+  }
+
+  def fold(f: HType)(x: HExpr): HExpr = {
+    x.htype match {
+      case (a --> (b --> c)) if (a == b)&&(a == c) => EPFold(f)(a)(a)(Primitives.identity(a))(x)
       case _ => throw new IRValidationException()
     }
   }

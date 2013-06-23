@@ -76,12 +76,14 @@ object PrettyPrint {
     case f ∘ g => {
       PP(3, pps(f, ld, tld).req(2) + " ∘ " + pps(g, ld, tld).req(2))
     }
+    case Primitives.identity => PP(0, "id")
+    case Primitives.compose => PP(0, "(∘)")
+    case p: EPrimitive => PP(0, p.name)
     case EVar(i, t) => PP(0, if(i <= ld) ('a' + (ld - i)).toChar.toString else ("X" + i.toString))
     case EApp(f, a) => PP(2, pps(f, ld, tld).req(2) + " " + pps(a, ld, tld).req(1))
     case ETApp(f, a) => PP(1, pps(f, ld, tld).req(1) + "[" + pps(a, tld).rv + "]")
     case ELambda(d, b) => PP(6, "λ (" + ('a' + ld).toChar.toString + ": " + pps(d, tld).rv + "). " + pps(b, ld+1, tld).req(6))
     case ETLambda(d, b) => PP(6, "Λ (" + ('α' + tld).toChar.toString + ": " + pps(d).rv + "). " + pps(b, ld, tld+1).req(6))
-    case p: EPrimitive => PP(0, p.name)
   }
 }
 

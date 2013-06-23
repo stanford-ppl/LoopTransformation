@@ -3,12 +3,8 @@ package ppl.ltc.rewrite
 import scala.collection._
 
 object Rewriter {
-  def rewrite(x: HExpr): Set[HExpr] = {
-    dispX = x
-    rewrite(x, mutable.Map())
-  }
+  def rewrite(x: HExpr): Set[HExpr] = rewrite(x, mutable.Map()).filter(u => !stronglyRewritable(u))
 
-  private var dispX: HExpr = null
   def rewrite(x: HExpr, memomap: mutable.Map[HExpr, Set[HExpr]]): Set[HExpr] = {
     if(memomap.contains(x)) return memomap(x)
     val xtype = x.htype
@@ -65,12 +61,33 @@ object Rewriter {
     acc
   }
 
+  def stronglyRewritable(x: HExpr): Boolean = {
+    for(r <- rules) {
+      if((r.strong)&&(r(x) != x)) return true
+    }
+    x match {
+      case ELambda(d, u) => stronglyRewritable(u)
+      case ETLambda(d, u) => stronglyRewritable(u)
+      case EApp(f, a) => stronglyRewritable(f) || stronglyRewritable(a)
+      case ETApp(f, a) => stronglyRewritable(f)
+      case _ => false
+    }
+  }
+
   def rules: Seq[RewriteRule] = Seq(RRComposeAssocLeft, RRComposeAssocRight, RRFMapFusion, RRFMapDeFusion, 
-    RRNTransCommLeft, RRNTransCommRight)
+    RRNTransCommLeft, RRNTransCommRight, RRComposeIdentity, RRMapFoldFusion)
 }
 
 trait RewriteRule {
   def apply(x: HExpr): HExpr
+  val strong: Boolean = false
+}
+
+object fmap {
+  def unapply(x: HExpr): Option[Tuple4[HType, HType, HType, HExpr]] = x match {
+    case EApp(ETApp(ETApp(ETApp(EPFMap, f), l), r), u) => Some((f, l, r, u))
+    case _ => None
+  }
 }
 
 object RRComposeAssocLeft extends RewriteRule {
@@ -78,6 +95,7 @@ object RRComposeAssocLeft extends RewriteRule {
     case f ∘ (g ∘ h) => (f ∘ g) ∘ h
     case _ => x
   }
+  override val strong: Boolean = true
 }
 
 object RRComposeAssocRight extends RewriteRule {
@@ -89,8 +107,7 @@ object RRComposeAssocRight extends RewriteRule {
 
 object RRFMapFusion extends RewriteRule {
   def apply(x: HExpr): HExpr = x match {
-    case (EApp(ETApp(ETApp(ETApp(EPFMap, f), lf), rf), u) ∘ EApp(ETApp(ETApp(ETApp(EPFMap, g), lg), rg), v)) 
-      if ((f == g)&&(rg == lf)) =>
+    case (fmap(f, lf, rf, u) ∘ fmap(g, lg, rg, v)) if ((f == g)&&(rg == lf)) =>
         EPFMap(f)(lg)(rf)(u ∘ v)
     case _ => x
   }
@@ -98,7 +115,7 @@ object RRFMapFusion extends RewriteRule {
 
 object RRFMapDeFusion extends RewriteRule {
   def apply(x: HExpr): HExpr = x match {
-    case EApp(ETApp(ETApp(ETApp(EPFMap, f), l), r), u ∘ v) => {
+    case fmap(f, l, r, u ∘ v) => {
       u.htype match {
         case ul --> ur => EPFMap(f)(ul)(r)(u) ∘ EPFMap(f)(l)(ul)(v)
       }
@@ -109,7 +126,7 @@ object RRFMapDeFusion extends RewriteRule {
 
 object RRNTransCommLeft extends RewriteRule {
   def apply(x: HExpr): HExpr = x match {
-    case EApp(ETApp(ETApp(ETApp(EPFMap, h), lf), rf), u) ∘ ETApp(n, v) if (lf == v) => n.htype.beta match {
+    case fmap(h, lf, rf, u) ∘ ETApp(n, v) if (lf == v) => n.htype.beta match {
       case TLambda(KType, TArr(TApp(f, TVar(1, KType)), TApp(g, TVar(1, KType)))) if(g == h) => {
         n(rf) ∘ EApp(ETApp(ETApp(ETApp(EPFMap, f), lf), rf), u)
       }
@@ -120,11 +137,28 @@ object RRNTransCommLeft extends RewriteRule {
 
 object RRNTransCommRight extends RewriteRule {
   def apply(x: HExpr): HExpr = x match {
-    case ETApp(n, v) ∘ EApp(ETApp(ETApp(ETApp(EPFMap, h), lf), rf), u) if (rf == v) => n.htype.beta match {
+    case ETApp(n, v) ∘ fmap(h, lf, rf, u) if (rf == v) => n.htype.beta match {
       case TLambda(KType, TArr(TApp(f, TVar(1, KType)), TApp(g, TVar(1, KType)))) if(f == h) => {
         EApp(ETApp(ETApp(ETApp(EPFMap, g), lf), rf), u) ∘ n(lf)
       }
     }
+    case _ => x
+  }
+}
+
+object RRComposeIdentity extends RewriteRule {
+  def apply(x: HExpr): HExpr = x match {
+    case f ∘ ETApp(Primitives.identity, a) => f
+    case ETApp(Primitives.identity, a) ∘ f => f
+    case _ => x
+  }
+  override val strong: Boolean = true
+}
+
+object RRMapFoldFusion extends RewriteRule {
+  def apply(x: HExpr): HExpr = x match {
+    case EApp(EApp(ETApp(ETApp(ETApp(EPFold, f), a), b), v), w) ∘ fmap(g, l, r, u) if((f == g)&&(r == a)) =>
+      EApp(EApp(ETApp(ETApp(ETApp(EPFold, f), l), b), v ∘ u), w)
     case _ => x
   }
 }

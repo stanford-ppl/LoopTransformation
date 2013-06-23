@@ -106,14 +106,14 @@ sealed trait HExpr {
     val TArr(lx, rx) = this.htype
     val TArr(ly, ry) = y.htype
     if(ry != lx) throw new IRValidationException()
-    EPCompose(ly)(ry)(rx)(this)(y)
+    Primitives.compose(ly)(ry)(rx)(this)(y)
   }
   def *(y: HExpr): HExpr = this ∘ y
 }
 
 object ∘ {
   def unapply(x: HExpr): Option[Tuple2[HExpr, HExpr]] = x match {
-    case EApp(EApp(ETApp(ETApp(ETApp(EPCompose, a), b), c), f), g) => Some((f, g))
+    case EApp(EApp(ETApp(ETApp(ETApp(Primitives.compose, a), b), c), f), g) => Some((f, g))
     case _ => None
   }
 }
@@ -131,16 +131,22 @@ sealed trait EPrimitive extends HExpr {
 
 import ScalaEmbedding._
 
-object EPCompose extends EPrimitive {
-  val name = "(∘)"
-  override val htype: HType = tlambda(★, a => tlambda(★, b => tlambda(★, c => 
-    (b --> c) --> ((a --> b) --> (a --> c)))))
+object Primitives {
+  val identity: HExpr = etlambda(★, a => elambda(a, x => x))
+  val compose: HExpr = etlambda(★, a => etlambda(★, b => etlambda(★, c => 
+    elambda(b --> c, f => elambda(a --> b, g => elambda(a, x => f(g(x))))))))
 }
 
 object EPFMap extends EPrimitive {
   val name = "fmap"
   override val htype: HType = tlambda(★ -->+ ★, f => tlambda(★, a => tlambda(★, b => 
     (a --> b) --> (f(a) --> f(b)))))
+}
+
+object EPFold extends EPrimitive {
+  val name = "mapfold"
+  override val htype: HType = tlambda(★ -->+ ★, f => tlambda(★, a => tlambda(★, b => 
+    (a --> b) --> ((b --> (b --> b)) --> (f(a) --> b)))))
 }
 
 object EPMyNTrans extends EPrimitive {
